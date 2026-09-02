@@ -23,6 +23,29 @@ data class Dashboard(
     val categories: List<Category>
 )
 
+data class Note(
+    val id: String,
+    val text: String,
+    val dueDate: String,
+    val dueTime: String,
+    val done: Boolean,
+    val rawText: String?
+)
+
+data class NoteDraft(
+    val text: String,
+    val dueDate: String = "",
+    val dueTime: String = "",
+    val done: Boolean = false,
+    val rawText: String? = null
+)
+
+data class NoteParseResult(
+    val ok: Boolean,
+    val error: String?,
+    val draft: NoteDraft?
+)
+
 object JsonMap {
     fun tx(o: org.json.JSONObject?): Tx? {
         if (o == null) return null
@@ -64,6 +87,18 @@ object JsonMap {
             periodExpense = o.optDouble("periodExpense", 0.0),
             transactions = txs,
             categories = cats
+        )
+    }
+
+    fun note(o: org.json.JSONObject?): Note? {
+        if (o == null) return null
+        return Note(
+            id = o.optString("id"),
+            text = o.optString("text"),
+            dueDate = o.optString("dueDate").takeIf { it.isNotBlank() && it != "null" }.orEmpty(),
+            dueTime = o.optString("dueTime").takeIf { it.isNotBlank() && it != "null" }.orEmpty(),
+            done = o.optBoolean("done", false),
+            rawText = o.optString("rawText").takeIf { it.isNotBlank() && it != "null" }
         )
     }
 }

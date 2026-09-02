@@ -6,4 +6,6 @@
     <color name="accent_ink">#F4FAF6</color>
     <color name="muted">#5C6B64</color>
     <color name="record">#9B3A2F</color>
+    <color name="surface">#FBFCFB</color>
+    <color name="line">#C5D0C9</color>
 </resources>

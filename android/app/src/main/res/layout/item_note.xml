@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingVertical="6dp">
 
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/doneCheck"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="0dp"
+        android:minHeight="0dp" />
+
     <TextView
-        android:id="@+id/categoryName"
+        android:id="@+id/noteText"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="2dp"
         android:layout_weight="1"
         android:ellipsize="end"
         android:maxLines="1"
@@ -17,7 +26,7 @@
         android:textSize="15sp" />
 
     <com.google.android.material.button.MaterialButton
-        android:id="@+id/renameButton"
+        android:id="@+id/dueDateButton"
         style="@style/Widget.Material3.Button.TextButton"
         android:layout_width="wrap_content"
         android:layout_height="36dp"
@@ -25,11 +34,11 @@
         android:insetBottom="0dp"
         android:minWidth="0dp"
         android:paddingHorizontal="6dp"
-        android:text="@string/rename"
+        android:text="@string/due_date"
         android:textSize="12sp" />
 
     <com.google.android.material.button.MaterialButton
-        android:id="@+id/deleteButton"
+        android:id="@+id/dueTimeButton"
         style="@style/Widget.Material3.Button.TextButton"
         android:layout_width="wrap_content"
         android:layout_height="36dp"
@@ -37,7 +46,6 @@
         android:insetBottom="0dp"
         android:minWidth="0dp"
         android:paddingHorizontal="6dp"
-        android:text="@string/delete"
-        android:textColor="@color/record"
+        android:text="@string/due_time"
         android:textSize="12sp" />
 </LinearLayout>

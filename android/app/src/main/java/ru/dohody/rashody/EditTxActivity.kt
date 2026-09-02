@@ -4,20 +4,17 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
-import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import ru.dohody.rashody.databinding.ActivityEditTxBinding
 import java.time.LocalDate
 
 class EditTxActivity : AppCompatActivity() {
     private lateinit var binding: ActivityEditTxBinding
-    private lateinit var client: GasClient
+    private lateinit var repo: Repository
     private var txId: String = ""
     private var mode: String = MODE_EDIT
     private var rawText: String? = null
@@ -37,7 +34,7 @@ class EditTxActivity : AppCompatActivity() {
             return
         }
 
-        client = GasClient(Prefs(this))
+        repo = Repository.get(this)
         binding.toolbar.setNavigationOnClickListener { finish() }
         binding.toolbar.title =
             if (mode == MODE_CREATE) getString(R.string.confirm_tx) else getString(R.string.edit_tx)
@@ -53,58 +50,51 @@ class EditTxActivity : AppCompatActivity() {
         binding.saveButton.setOnClickListener { save() }
         binding.deleteButton.setOnClickListener { confirmDelete() }
 
-        if (mode == MODE_CREATE) {
-            loadForCreate()
-        } else {
-            loadForEdit()
-        }
-    }
-
-    private fun loadForCreate() {
         lifecycleScope.launch {
             try {
-                categories = withContext(Dispatchers.IO) { client.listCategories() }
-                setupCategoryDropdown()
-                val type = intent.getStringExtra(EXTRA_TYPE)
-                if (type == "income") binding.typeIncome.isChecked = true
-                else binding.typeExpense.isChecked = true
-                intent.getDoubleExtra(EXTRA_AMOUNT, Double.NaN).takeIf { !it.isNaN() }?.let {
-                    binding.amountInput.setText(DatePresets.money(it))
-                }
-                binding.categoryInput.setText(intent.getStringExtra(EXTRA_CATEGORY).orEmpty(), false)
-                binding.commentInput.setText(intent.getStringExtra(EXTRA_COMMENT).orEmpty())
-                binding.dateInput.setText(
-                    intent.getStringExtra(EXTRA_DATE)?.takeIf { it.isNotBlank() }
-                        ?: LocalDate.now().toString()
-                )
-                binding.categoryLayout.visibility =
-                    if (binding.typeExpense.isChecked) View.VISIBLE else View.GONE
-                val raw = rawText?.takeIf { it.isNotBlank() }
-                if (raw != null) {
-                    binding.rawHint.visibility = View.VISIBLE
-                    binding.rawHint.text = "«$raw»"
-                }
+                repo.ensureLoaded()
+                categories = repo.categories()
+                if (mode == MODE_CREATE) bindCreate() else bindEdit()
             } catch (e: Exception) {
-                Toast.makeText(this@EditTxActivity, e.message, Toast.LENGTH_LONG).show()
+                e.rethrowIfCancellation()
+                e.userMessage()?.let {
+                    Toast.makeText(this@EditTxActivity, it, Toast.LENGTH_LONG).show()
+                }
                 finish()
             }
         }
     }
 
-    private fun loadForEdit() {
-        lifecycleScope.launch {
-            try {
-                val tx = withContext(Dispatchers.IO) { client.getTransaction(txId) }
-                categories = withContext(Dispatchers.IO) { client.listCategories() }
-                bind(tx)
-            } catch (e: Exception) {
-                Toast.makeText(this@EditTxActivity, e.message, Toast.LENGTH_LONG).show()
-                finish()
-            }
+    private fun bindCreate() {
+        setupCategoryDropdown()
+        val type = intent.getStringExtra(EXTRA_TYPE)
+        if (type == "income") binding.typeIncome.isChecked = true
+        else binding.typeExpense.isChecked = true
+        intent.getDoubleExtra(EXTRA_AMOUNT, Double.NaN).takeIf { !it.isNaN() }?.let {
+            binding.amountInput.setText(DatePresets.money(it))
+        }
+        binding.categoryInput.setText(intent.getStringExtra(EXTRA_CATEGORY).orEmpty(), false)
+        binding.commentInput.setText(intent.getStringExtra(EXTRA_COMMENT).orEmpty())
+        binding.dateInput.setText(
+            intent.getStringExtra(EXTRA_DATE)?.takeIf { it.isNotBlank() }
+                ?: LocalDate.now().toString()
+        )
+        binding.categoryLayout.visibility =
+            if (binding.typeExpense.isChecked) View.VISIBLE else View.GONE
+        val raw = rawText?.takeIf { it.isNotBlank() }
+        if (raw != null) {
+            binding.rawHint.visibility = View.VISIBLE
+            binding.rawHint.text = "«$raw»"
         }
     }
 
-    private fun bind(tx: Tx) {
+    private fun bindEdit() {
+        val tx = repo.snapshotOrNull()?.transactions?.find { it.id == txId }
+        if (tx == null) {
+            Toast.makeText(this, "Запись не найдена", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         if (tx.type == "income") binding.typeIncome.isChecked = true
         else binding.typeExpense.isChecked = true
         binding.amountInput.setText(DatePresets.money(tx.amount))
@@ -118,10 +108,11 @@ class EditTxActivity : AppCompatActivity() {
 
     private fun setupCategoryDropdown() {
         val names = categories.map { it.name }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, names)
-        binding.categoryInput.setAdapter(adapter)
+        binding.categoryInput.setAdapter(Repository.categoryAdapter(this, names))
         binding.categoryInput.threshold = 0
-        binding.categoryInput.setOnClickListener { binding.categoryInput.showDropDown() }
+        binding.categoryInput.setOnClickListener {
+            binding.categoryInput.showDropDown()
+        }
         binding.categoryInput.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) binding.categoryInput.showDropDown()
         }
@@ -155,24 +146,14 @@ class EditTxActivity : AppCompatActivity() {
         val draft = readDraft() ?: return
 
         fun doSave(confirmNew: Boolean) {
-            binding.saveButton.isEnabled = false
-            lifecycleScope.launch {
-                try {
-                    withContext(Dispatchers.IO) {
-                        if (mode == MODE_CREATE) {
-                            val source = intent.getStringExtra(EXTRA_SOURCE) ?: "android_voice"
-                            client.create(draft, confirmNew, source = source)
-                        } else {
-                            client.update(txId, draft, confirmNew)
-                        }
-                    }
-                    setResult(RESULT_OK)
-                    finish()
-                } catch (e: Exception) {
-                    Toast.makeText(this@EditTxActivity, e.message, Toast.LENGTH_LONG).show()
-                    binding.saveButton.isEnabled = true
-                }
+            if (mode == MODE_CREATE) {
+                val source = intent.getStringExtra(EXTRA_SOURCE) ?: "android_voice"
+                repo.createTx(draft, confirmNew, source)
+            } else {
+                repo.updateTx(txId, draft, confirmNew)
             }
+            setResult(RESULT_OK)
+            finish()
         }
 
         if (draft.categoryIsNew) {
@@ -192,15 +173,9 @@ class EditTxActivity : AppCompatActivity() {
             .setTitle("Удалить запись?")
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
-                lifecycleScope.launch {
-                    try {
-                        withContext(Dispatchers.IO) { client.delete(txId) }
-                        setResult(RESULT_OK)
-                        finish()
-                    } catch (e: Exception) {
-                        Toast.makeText(this@EditTxActivity, e.message, Toast.LENGTH_LONG).show()
-                    }
-                }
+                repo.deleteTx(txId)
+                setResult(RESULT_OK)
+                finish()
             }
             .show()
     }

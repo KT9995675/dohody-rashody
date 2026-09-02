@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 .idea/
 android/.gradle/
+android/.gradle-home/
 android/.gradle-dist/
 android/.jdk/
 android/.android-sdk/

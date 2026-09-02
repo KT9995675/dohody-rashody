@@ -22,8 +22,23 @@
             android:exported="false"
             android:label="@string/edit_tx" />
         <activity
-            android:name=".MainActivity"
+            android:name=".EditNoteActivity"
+            android:exported="false"
+            android:label="@string/edit_note" />
+        <activity
+            android:name=".FinanceActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".NotesActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".HomeActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

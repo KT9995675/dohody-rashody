@@ -25,10 +25,7 @@ function parseNote(text) {
     };
   }
 
-  var categories = listCategories();
-  var names = categories.map(function (c) {
-    return c.name;
-  });
+  var names = listCategoryNamesCached_();
 
   try {
     var ai = geminiParseFinanceNote_(text, names);
@@ -64,10 +61,7 @@ function parseAudioNote(base64, mimeType) {
     };
   }
 
-  var categories = listCategories();
-  var names = categories.map(function (c) {
-    return c.name;
-  });
+  var names = listCategoryNamesCached_();
 
   try {
     var ai = geminiParseFinanceAudio_(base64, mimeType, names);

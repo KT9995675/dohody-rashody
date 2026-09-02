@@ -83,7 +83,7 @@ class GasClient(private val prefs: Prefs) {
         throw IllegalStateException("Слишком много редиректов от Google")
     }
 
-    private fun post(payload: JSONObject): JSONObject {
+    private fun postOnce(payload: JSONObject): JSONObject {
         val withToken = JSONObject(payload.toString()).put("token", prefs.token.trim())
         val body = withToken.toString()
             .toRequestBody("text/plain;charset=utf-8".toMediaType())
@@ -109,9 +109,29 @@ class GasClient(private val prefs: Prefs) {
         }
     }
 
+    /**
+     * GAS иногда отвечает 404 на одноразовом googleusercontent-редиректе
+     * (гонка/холодный старт). Один повтор обычно помогает.
+     */
+    private fun post(payload: JSONObject): JSONObject {
+        return try {
+            postOnce(payload)
+        } catch (e: IllegalStateException) {
+            val msg = e.message.orEmpty()
+            if (msg.contains("HTTP 404") || msg.contains("HTTP 502") || msg.contains("HTTP 503")) {
+                Thread.sleep(350)
+                postOnce(payload)
+            } else {
+                throw e
+            }
+        }
+    }
+
     private fun explainHttp(code: Int, text: String): String {
         val snippet = text.replace(Regex("\\s+"), " ").take(160)
         return when {
+            code == 404 ->
+                "HTTP 404: временный сбой редиректа Google Apps Script. Повторите; если часто — Deploy → новая версия (…/exec)."
             code == 405 ->
                 "HTTP 405: отклонено Google. Нужен деплой Anyone + URL …/exec."
             code == 401 || code == 403 ->
@@ -146,6 +166,31 @@ class GasClient(private val prefs: Prefs) {
     }
 
     fun ping(): JSONObject = getFollowingRedirects(urlWithParams(mapOf("action" to "ping")))
+
+    fun bootstrap(): Snapshot {
+        val json = requireOk(post(JSONObject().put("action", "bootstrap")))
+        val dash = JsonMap.dashboard(json.optJSONObject("dashboard"))
+            ?: throw IllegalStateException("Пустой dashboard")
+        val notes = mutableListOf<Note>()
+        val arr = json.optJSONArray("notes") ?: JSONArray()
+        for (i in 0 until arr.length()) {
+            JsonMap.note(arr.optJSONObject(i))?.let { notes.add(it) }
+        }
+        val cats = if (dash.categories.isNotEmpty()) dash.categories else {
+            val out = mutableListOf<Category>()
+            val carr = json.optJSONArray("categories") ?: JSONArray()
+            for (i in 0 until carr.length()) {
+                JsonMap.category(carr.optJSONObject(i))?.let { out.add(it) }
+            }
+            out
+        }
+        return Snapshot(
+            balance = dash.balance,
+            transactions = dash.transactions,
+            categories = cats,
+            notes = notes
+        )
+    }
 
     fun dashboard(from: String, to: String): Dashboard {
         val json = requireOk(
@@ -254,6 +299,94 @@ class GasClient(private val prefs: Prefs) {
         val json = requireOk(post(JSONObject().put("action", "categoryUsage").put("id", id)))
         val u = json.optJSONObject("usage") ?: throw IllegalStateException("Нет usage")
         return u.optString("name") to u.optInt("count", 0)
+    }
+
+    fun parseNoteText(text: String): NoteParseResult =
+        noteParseResultFrom(
+            post(JSONObject().put("action", "parseNoteText").put("text", text))
+        )
+
+    fun parseNoteAudio(base64: String, mimeType: String): NoteParseResult =
+        noteParseResultFrom(
+            post(
+                JSONObject()
+                    .put("action", "parseNoteAudio")
+                    .put("audioBase64", base64)
+                    .put("mimeType", mimeType)
+            )
+        )
+
+    fun listNotes(includeDone: Boolean): List<Note> {
+        val json = requireOk(
+            post(
+                JSONObject()
+                    .put("action", "listNotes")
+                    .put("includeDone", includeDone)
+            )
+        )
+        val out = mutableListOf<Note>()
+        val arr = json.optJSONArray("notes") ?: JSONArray()
+        for (i in 0 until arr.length()) {
+            JsonMap.note(arr.optJSONObject(i))?.let { out.add(it) }
+        }
+        return out
+    }
+
+    fun getNote(id: String): Note {
+        val json = requireOk(post(JSONObject().put("action", "getNote").put("id", id)))
+        return JsonMap.note(json.optJSONObject("note"))
+            ?: throw IllegalStateException("Нет note")
+    }
+
+    fun createNote(draft: NoteDraft, source: String = "android_text"): JSONObject {
+        return requireOk(
+            post(
+                JSONObject()
+                    .put("action", "createNote")
+                    .put("draft", noteDraftJson(draft))
+                    .put("source", source)
+            )
+        )
+    }
+
+    fun updateNote(id: String, draft: NoteDraft): JSONObject {
+        return requireOk(
+            post(
+                JSONObject()
+                    .put("action", "updateNote")
+                    .put("id", id)
+                    .put("draft", noteDraftJson(draft))
+            )
+        )
+    }
+
+    fun deleteNote(id: String): JSONObject =
+        requireOk(post(JSONObject().put("action", "deleteNote").put("id", id)))
+
+    private fun noteDraftJson(draft: NoteDraft): JSONObject =
+        JSONObject()
+            .put("text", draft.text)
+            .put("dueDate", draft.dueDate)
+            .put("dueTime", draft.dueTime)
+            .put("done", draft.done)
+            .put("rawText", draft.rawText)
+
+    private fun noteParseResultFrom(json: JSONObject): NoteParseResult {
+        val draftJson = json.optJSONObject("draft")
+        val draft = draftJson?.let {
+            NoteDraft(
+                text = it.optString("text").takeIf { s -> s.isNotBlank() && s != "null" }.orEmpty(),
+                dueDate = it.optString("dueDate").takeIf { s -> s.isNotBlank() && s != "null" }.orEmpty(),
+                dueTime = it.optString("dueTime").takeIf { s -> s.isNotBlank() && s != "null" }.orEmpty(),
+                rawText = it.optString("rawText").takeIf { s -> s.isNotBlank() && s != "null" }
+            )
+        }
+        val error = json.optString("error").takeIf { it.isNotBlank() && it != "null" }
+        return NoteParseResult(
+            ok = json.optBoolean("ok", false),
+            error = error,
+            draft = draft
+        )
     }
 
     private fun draftJson(draft: Draft): JSONObject {

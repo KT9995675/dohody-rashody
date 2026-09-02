@@ -231,3 +231,52 @@ function apiGeminiStatus() {
     hasApiKey: !!s.apiKey
   };
 }
+
+/** Full snapshot for web/Android cold start. */
+function apiBootstrap() {
+  assertOwner_();
+  ensureSheets_();
+  var dash = getDashboard({ from: '', to: '' });
+  return {
+    ok: true,
+    dashboard: dash,
+    notes: listNotes({ includeDone: true }),
+    categories: dash.categories || listCategories(),
+    timeZone: Session.getScriptTimeZone()
+  };
+}
+
+function apiParseTodoNote(text) {
+  assertOwner_();
+  return parseTodoNote(text);
+}
+
+function apiParseTodoAudioNote(base64, mimeType) {
+  assertOwner_();
+  return parseTodoAudioNote(base64, mimeType);
+}
+
+function apiListNotes(includeDone) {
+  assertOwner_();
+  return listNotes({ includeDone: !!includeDone });
+}
+
+function apiGetNote(id) {
+  assertOwner_();
+  return getNote(id);
+}
+
+function apiCreateNote(payload) {
+  assertOwner_();
+  return createNote(payload);
+}
+
+function apiUpdateNote(id, payload) {
+  assertOwner_();
+  return updateNote(id, payload);
+}
+
+function apiDeleteNote(id) {
+  assertOwner_();
+  return deleteNote(id);
+}

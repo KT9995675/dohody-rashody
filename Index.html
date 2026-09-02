@@ -13,18 +13,45 @@
           <p class="brand">Доходы–расходы</p>
           <p class="muted" id="tzHint"></p>
         </div>
-        <div class="balance-block">
+        <div class="balance-block" id="balanceBlock">
           <span class="muted">Баланс</span>
           <strong id="balance" class="balance">—</strong>
         </div>
       </header>
 
       <nav class="tabs" role="tablist">
-        <button type="button" class="tab active" data-tab="ops">Записи</button>
+        <button type="button" class="tab active" data-tab="home">Главная</button>
+        <button type="button" class="tab" data-tab="finance">Финансы</button>
+        <button type="button" class="tab" data-tab="notes">Заметки</button>
         <button type="button" class="tab" data-tab="cats">Категории</button>
       </nav>
 
-      <section id="tab-ops" class="tab-panel active">
+      <section id="tab-home" class="tab-panel active">
+        <div class="panel">
+          <h2>Расходы / доходы</h2>
+          <label>
+            Фраза
+            <input type="text" id="financeText" placeholder="500 на еду кофе" />
+          </label>
+          <div class="actions">
+            <button type="button" class="btn primary" id="btnFinanceSend">Отправить</button>
+          </div>
+          <p class="muted home-hint">Голос — в Android-приложении.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Заметка</h2>
+          <label>
+            Текст
+            <input type="text" id="todoText" placeholder="Завтра в 15:00 купить молоко" />
+          </label>
+          <div class="actions">
+            <button type="button" class="btn primary" id="btnTodoSend">Отправить</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-finance" class="tab-panel">
         <div class="filters">
           <div class="presets">
             <button type="button" class="chip" data-preset="today">Сегодня</button>
@@ -41,7 +68,7 @@
         </div>
 
         <div class="panel">
-          <h2>Новая запись</h2>
+          <h2>Новая запись вручную</h2>
           <form id="formAdd" class="form">
             <div class="row">
               <label class="grow">
@@ -58,11 +85,13 @@
             </div>
             <label id="addCategoryWrap">
               Категория
-              <select id="addCategory"></select>
-            </label>
-            <label id="addNewCatWrap" class="hidden">
-              Новая категория
-              <input type="text" id="addNewCategory" placeholder="Название" />
+              <input
+                type="text"
+                id="addCategory"
+                list="categoryList"
+                placeholder="Выберите или введите новую"
+                autocomplete="off"
+              />
             </label>
             <label>
               Комментарий
@@ -70,32 +99,23 @@
             </label>
             <div class="actions">
               <button type="submit" class="btn primary">Сохранить</button>
-              <button type="button" class="btn" id="btnVoice">Голос (файл)</button>
-              <button type="button" class="btn ghost hidden" id="btnVoiceStop">Стоп</button>
-              <button type="button" class="btn ghost" id="btnVoiceMic" title="Попытка записи в браузере">Микрофон</button>
             </div>
-            <input type="file" id="audioFile" class="hidden" accept="audio/*,video/mp4" capture />
-            <label>
-              Фраза для разбора
-              <input
-                type="text"
-                id="noteText"
-                placeholder="500 на еду кофе"
-              />
-            </label>
-            <div class="actions">
-              <button type="button" class="btn" id="btnParseNote">Разобрать фразу</button>
-            </div>
-            <p class="muted" id="voiceStatus">
-              В приложении Google микрофон браузера обычно заблокирован.
-              «Голос (файл)» — запись/выбор аудио → разбор Gemini. Либо диктовка с клавиатуры в поле фразы.
-            </p>
           </form>
         </div>
 
         <div class="panel">
           <h2>Список</h2>
           <div id="txList" class="list"></div>
+        </div>
+      </section>
+
+      <section id="tab-notes" class="tab-panel">
+        <div class="panel">
+          <label class="inline-check">
+            <input type="checkbox" id="showDoneNotes" />
+            Показывать завершённые
+          </label>
+          <div id="notesList" class="list"></div>
         </div>
       </section>
 
@@ -134,11 +154,13 @@
         </div>
         <label id="editCategoryWrap">
           Категория
-          <select id="editCategory"></select>
-        </label>
-        <label id="editNewCatWrap" class="hidden">
-          Новая категория
-          <input type="text" id="editNewCategory" />
+          <input
+            type="text"
+            id="editCategory"
+            list="categoryList"
+            placeholder="Выберите или введите новую"
+            autocomplete="off"
+          />
         </label>
         <label>
           Комментарий
@@ -153,7 +175,7 @@
 
     <dialog id="dlgVoice">
       <form method="dialog" id="formVoice" class="form dialog-form">
-        <h2>Подтверждение</h2>
+        <h2>Подтверждение — финансы</h2>
         <p class="muted" id="voiceRaw"></p>
         <p class="warn hidden" id="voiceParseHint"></p>
         <div class="row">
@@ -171,13 +193,15 @@
         </div>
         <label id="voiceCategoryWrap">
           Категория
-          <select id="voiceCategory"></select>
+          <input
+            type="text"
+            id="voiceCategory"
+            list="categoryList"
+            placeholder="Выберите или введите новую"
+            autocomplete="off"
+          />
         </label>
-        <label id="voiceNewCatWrap" class="hidden">
-          Новая категория
-          <input type="text" id="voiceNewCategory" />
-        </label>
-        <p id="voiceNewHint" class="warn hidden">Такой категории ещё нет — подтвердите создание или выберите другую.</p>
+        <p id="voiceNewHint" class="warn hidden">Категории ещё нет в справочнике — при записи она будет добавлена.</p>
         <label>
           Комментарий
           <input type="text" id="voiceComment" />
@@ -188,6 +212,40 @@
         </div>
       </form>
     </dialog>
+
+    <dialog id="dlgNote">
+      <form method="dialog" id="formNote" class="form dialog-form">
+        <h2 id="noteDlgTitle">Подтверждение — заметка</h2>
+        <input type="hidden" id="noteEditId" />
+        <p class="muted" id="noteRaw"></p>
+        <p class="warn hidden" id="noteParseHint"></p>
+        <label>
+          Текст
+          <input type="text" id="noteTextField" required />
+        </label>
+        <div class="row">
+          <label class="grow">
+            Дата выполнения
+            <input type="date" id="noteDueDate" />
+          </label>
+          <label class="grow">
+            Время
+            <input type="time" id="noteDueTime" />
+          </label>
+        </div>
+        <label class="inline-check">
+          <input type="checkbox" id="noteDone" />
+          Выполнено
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn primary" id="noteSaveBtn">Записать</button>
+          <button type="button" class="btn danger hidden" id="noteDeleteBtn">Удалить</button>
+          <button type="button" class="btn ghost" id="btnNoteCancel">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
+    <datalist id="categoryList"></datalist>
 
     <dialog id="dlgReplaceCat">
       <form method="dialog" id="formReplaceCat" class="form dialog-form">

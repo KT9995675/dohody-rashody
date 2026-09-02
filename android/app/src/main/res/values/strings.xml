@@ -1,6 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Доходы–расходы</string>
+    <string name="nav_home">Главная</string>
+    <string name="nav_finance">Финансы</string>
+    <string name="nav_notes">Заметки</string>
+    <string name="finance_block">Расходы / доходы</string>
+    <string name="finance_hint">500 на еду кофе</string>
+    <string name="todo_block">Заметка</string>
+    <string name="todo_hint">Завтра в 15:00 купить молоко</string>
+    <string name="show_done_notes">Показывать завершённые</string>
+    <string name="empty_notes">Заметок нет</string>
+    <string name="confirm_note">Подтверждение</string>
+    <string name="edit_note">Заметка</string>
+    <string name="save_note">Записать</string>
+    <string name="note_text">Текст</string>
+    <string name="due_date">Дата выполнения</string>
+    <string name="due_time">Время</string>
+    <string name="note_done">Выполнено</string>
     <string name="settings">Настройки</string>
     <string name="connection">Подключение</string>
     <string name="categories">Категории</string>

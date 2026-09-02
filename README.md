@@ -6,7 +6,7 @@
 |----------|------------|
 | [GUIDE.md](GUIDE.md) | **Руководство пользователя** |
 | [SPEC.md](SPEC.md) | Спецификация и архитектура |
-| [VERSION.md](VERSION.md) | Версии и откат (**текущая: 1.1.0**) |
+| [VERSION.md](VERSION.md) | Версии и откат (**текущая: 1.2.0**) |
 | [android/README.md](android/README.md) | Сборка APK |
 
 ## Ссылки
@@ -22,6 +22,6 @@ clasp push
 
 1. **setup** + **Настроить Gemini** + **Токен для Android**  
 2. Deploy Web App: **Me** + **Anyone**, URL `…/exec`  
-3. Android: настройки → URL + token → заметка или 🎤 → подтверждение  
+3. Android: настройки → URL + token → на **Главной** фраза или 🎤 → подтверждение  
 
 Подробно — в [GUIDE.md](GUIDE.md).

@@ -30,6 +30,16 @@ function ensureSheets_() {
     seedDefaultCategories_(cat);
   }
 
+  var notes = ss.getSheetByName(SHEET_NOTES);
+  if (!notes) {
+    notes = ss.insertSheet(SHEET_NOTES);
+    notes.getRange(1, 1, 1, NOTE_HEADERS.length).setValues([NOTE_HEADERS]);
+    notes.setFrozenRows(1);
+  } else if (notes.getLastRow() === 0) {
+    notes.getRange(1, 1, 1, NOTE_HEADERS.length).setValues([NOTE_HEADERS]);
+    notes.setFrozenRows(1);
+  }
+
   return ss;
 }
 
@@ -39,7 +49,8 @@ function seedDefaultCategories_(sheet) {
     return [Utilities.getUuid(), name, now];
   });
   if (rows.length) {
-    sheet.getRange(2, 1, rows.length, CAT_HEADERS.length).setValues(rows);
+    // getRange(r1,c1,r2,c2) — r2 is last row index, not row count
+    sheet.getRange(2, 1, 1 + rows.length, CAT_HEADERS.length).setValues(rows);
   }
 }
 
@@ -51,6 +62,11 @@ function getTxSheet_() {
 function getCatSheet_() {
   ensureSheets_();
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CATEGORIES);
+}
+
+function getNotesSheet_() {
+  ensureSheets_();
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NOTES);
 }
 
 function newId_() {

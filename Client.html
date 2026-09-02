@@ -2,12 +2,18 @@
   (function () {
     var state = {
       categories: [],
+      transactions: [],
+      notes: [],
+      balance: 0,
+      timeZone: '',
+      loaded: false,
       filter: { from: '', to: '' },
       preset: 'all',
-      voiceDraft: null
+      voiceDraft: null,
+      noteDraft: null,
+      noteEditMode: 'create',
+      activeTab: 'home'
     };
-
-    var NEW_CAT_VALUE = '__new__';
 
     function $(id) {
       return document.getElementById(id);
@@ -43,6 +49,16 @@
       });
     }
 
+    function formatNoteWhen(note) {
+      var parts = [];
+      if (note.dueDate) {
+        var d = note.dueDate.split('-');
+        parts.push(d[2] + '.' + d[1] + '.' + d[0]);
+      }
+      if (note.dueTime) parts.push(note.dueTime);
+      return parts.length ? parts.join(' ') : 'Без даты';
+    }
+
     function toDatetimeLocal(iso) {
       if (!iso) return '';
       var d = new Date(iso);
@@ -71,67 +87,195 @@
 
     function startOfWeek(d) {
       var x = new Date(d);
-      var day = (x.getDay() + 6) % 7; // Mon=0
+      var day = (x.getDay() + 6) % 7;
       x.setDate(x.getDate() - day);
       x.setHours(0, 0, 0, 0);
       return x;
     }
 
-    function fillCategorySelect(selectEl, selected, includeNew) {
-      selectEl.innerHTML = '';
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function txDay(iso) {
+      if (!iso) return '';
+      var s = String(iso);
+      if (s.length >= 10 && s.charAt(4) === '-') return s.slice(0, 10);
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      return ymd(d);
+    }
+
+    function recomputeBalance() {
+      var b = 0;
+      state.transactions.forEach(function (t) {
+        if (t.type === 'income') b += Number(t.amount) || 0;
+        else if (t.type === 'expense') b -= Number(t.amount) || 0;
+      });
+      state.balance = Math.round(b * 100) / 100;
+    }
+
+    function filteredTransactions() {
+      var from = state.filter.from || '';
+      var to = state.filter.to || '';
+      return state.transactions
+        .filter(function (t) {
+          var day = txDay(t.date);
+          if (from && day && day < from) return false;
+          if (to && day && day > to) return false;
+          return true;
+        })
+        .sort(function (a, b) {
+          return String(b.date || '').localeCompare(String(a.date || ''));
+        });
+    }
+
+    function periodSums(list) {
+      var income = 0;
+      var expense = 0;
+      list.forEach(function (t) {
+        if (t.type === 'income') income += Number(t.amount) || 0;
+        else expense += Number(t.amount) || 0;
+      });
+      return {
+        periodIncome: Math.round(income * 100) / 100,
+        periodExpense: Math.round(expense * 100) / 100
+      };
+    }
+
+    function sortedNotes(includeDone) {
+      var list = (state.notes || []).filter(function (n) {
+        return includeDone || !n.done;
+      });
+      list.sort(function (a, b) {
+        var aHas = !!a.dueDate;
+        var bHas = !!b.dueDate;
+        if (aHas && !bHas) return -1;
+        if (!aHas && bHas) return 1;
+        if (aHas && bHas) {
+          if (a.dueDate !== b.dueDate) return a.dueDate < b.dueDate ? -1 : 1;
+          var at = a.dueTime || '99:99';
+          var bt = b.dueTime || '99:99';
+          if (at !== bt) return at < bt ? -1 : 1;
+        }
+        return 0;
+      });
+      return list;
+    }
+
+    function applySnapshot(data) {
+      var dash = data.dashboard || {};
+      state.transactions = dash.transactions || [];
+      state.categories = data.categories || dash.categories || [];
+      state.notes = data.notes || [];
+      if (dash.balance != null) state.balance = dash.balance;
+      else recomputeBalance();
+      state.timeZone = data.timeZone || dash.timeZone || state.timeZone;
+      state.loaded = true;
+      if (state.timeZone) {
+        $('tzHint').textContent = 'Часовой пояс: ' + state.timeZone;
+      }
+      renderAll();
+    }
+
+    /** Full load from Sheets — once at start (and after mutations). */
+    function loadBootstrap() {
+      return run('apiBootstrap').then(applySnapshot);
+    }
+
+    function renderAll() {
+      renderFinanceFromCache();
+      renderNotesFromCache();
+      renderCategories();
+      refreshCategoryList();
+      syncCategoryVisibility('addType', 'addCategoryWrap');
+    }
+
+    function renderFinanceFromCache() {
+      var list = filteredTransactions();
+      var sums = periodSums(list);
+      renderBalance(state.balance);
+      renderPeriod(sums);
+      renderTransactions(list);
+    }
+
+    function renderNotesFromCache() {
+      renderNotes(sortedNotes($('showDoneNotes').checked));
+    }
+
+    /** Keep old names as aliases for call sites. */
+    function loadDashboard() {
+      if (!state.loaded) return loadBootstrap();
+      renderFinanceFromCache();
+      return Promise.resolve();
+    }
+
+    function loadNotes() {
+      if (!state.loaded) return loadBootstrap();
+      renderNotesFromCache();
+      return Promise.resolve();
+    }
+
+    function afterWrite() {
+      return loadBootstrap().catch(showError);
+    }
+
+    function refreshCategoryList() {
+      var dl = $('categoryList');
+      if (!dl) return;
+      dl.innerHTML = '';
       state.categories.forEach(function (c) {
         var opt = document.createElement('option');
         opt.value = c.name;
-        opt.textContent = c.name;
-        if (selected && selected.toLowerCase() === c.name.toLowerCase()) {
-          opt.selected = true;
-        }
-        selectEl.appendChild(opt);
+        dl.appendChild(opt);
       });
-      if (includeNew) {
-        var neu = document.createElement('option');
-        neu.value = NEW_CAT_VALUE;
-        neu.textContent = '— Новая категория —';
-        if (selected === NEW_CAT_VALUE) neu.selected = true;
-        selectEl.appendChild(neu);
-      }
-      if (!state.categories.length && includeNew) {
-        selectEl.value = NEW_CAT_VALUE;
-      }
     }
 
-    function syncCategoryVisibility(typeSelectId, wrapId, newWrapId, selectId) {
+    function syncCategoryVisibility(typeSelectId, wrapId) {
       var isExpense = $(typeSelectId).value === 'expense';
       $(wrapId).classList.toggle('hidden', !isExpense);
-      if (!isExpense) {
-        $(newWrapId).classList.add('hidden');
-      } else {
-        $(newWrapId).classList.toggle('hidden', $(selectId).value !== NEW_CAT_VALUE);
-      }
     }
 
-    function bindCategoryUi(typeId, selectId, newWrapId, wrapId) {
+    function bindCategoryUi(typeId, wrapId) {
       $(typeId).addEventListener('change', function () {
-        syncCategoryVisibility(typeId, wrapId, newWrapId, selectId);
-      });
-      $(selectId).addEventListener('change', function () {
-        $(newWrapId).classList.toggle('hidden', $(selectId).value !== NEW_CAT_VALUE);
+        syncCategoryVisibility(typeId, wrapId);
       });
     }
 
-    function loadDashboard() {
-      return run('apiGetDashboard', state.filter).then(function (data) {
-        state.categories = data.categories || [];
-        renderBalance(data.balance);
-        renderPeriod(data);
-        renderTransactions(data.transactions || []);
-        renderCategories();
-        fillCategorySelect($('addCategory'), null, true);
-        syncCategoryVisibility('addType', 'addCategoryWrap', 'addNewCatWrap', 'addCategory');
-        if (data.timeZone) {
-          $('tzHint').textContent = 'Часовой пояс: ' + data.timeZone;
-        }
+    function resolveCategoryInput(inputId) {
+      var name = $(inputId).value.trim();
+      if (!name) throw new Error('Укажите категорию');
+      var known = state.categories.some(function (c) {
+        return c.name.toLowerCase() === name.toLowerCase();
       });
+      if (!known) {
+        var ok = confirm('Категории «' + name + '» ещё нет. Добавить в справочник?');
+        if (!ok) throw new Error('Выберите существующую категорию или подтвердите новую');
+      }
+      return { category: name, confirmNewCategory: !known };
+    }
+
+    function showError(err) {
+      alert(err && err.message ? err.message : String(err));
+    }
+
+    function setActiveTab(name) {
+      state.activeTab = name;
+      document.querySelectorAll('.tab').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-tab') === name);
+      });
+      document.querySelectorAll('.tab-panel').forEach(function (p) {
+        p.classList.remove('active');
+      });
+      $('tab-' + name).classList.add('active');
+      $('balanceBlock').classList.toggle('hidden-balance', name !== 'finance');
+      if (name === 'finance') renderFinanceFromCache();
+      if (name === 'notes') renderNotesFromCache();
+      if (name === 'cats') renderCategories();
     }
 
     function renderBalance(balance) {
@@ -191,6 +335,73 @@
       });
     }
 
+    function renderNotes(list) {
+      var root = $('notesList');
+      root.innerHTML = '';
+      if (!list.length) {
+        root.innerHTML = '<p class="muted">Заметок нет</p>';
+        return;
+      }
+      list.forEach(function (n) {
+        var div = document.createElement('div');
+        div.className = 'item note-item' + (n.done ? ' done-note' : '');
+        div.innerHTML =
+          '<div class="note-row">' +
+          '<label class="note-done-check">' +
+          '<input type="checkbox" data-note-done="' +
+          n.id +
+          '"' +
+          (n.done ? ' checked' : '') +
+          ' />' +
+          '</label>' +
+          '<button type="button" class="note-title-btn" data-note-edit="' +
+          n.id +
+          '" title="Изменить текст">' +
+          escapeHtml(n.text) +
+          '</button>' +
+          '<input type="date" class="note-date" data-note-date="' +
+          n.id +
+          '" value="' +
+          escapeHtml(n.dueDate || '') +
+          '" title="Дата" />' +
+          '<input type="time" class="note-time" data-note-time="' +
+          n.id +
+          '" value="' +
+          escapeHtml(n.dueTime || '') +
+          '" title="Время" />' +
+          '<button type="button" class="btn small note-del" data-note-del="' +
+          n.id +
+          '">×</button>' +
+          '</div>';
+        root.appendChild(div);
+      });
+    }
+
+    function patchNoteFromList(id, patch) {
+      var note = null;
+      for (var i = 0; i < state.notes.length; i++) {
+        if (state.notes[i].id === id) {
+          note = state.notes[i];
+          break;
+        }
+      }
+      if (!note) return Promise.reject(new Error('Заметка не найдена'));
+      var payload = {
+        text: note.text,
+        dueDate: note.dueDate || '',
+        dueTime: note.dueTime || '',
+        done: !!note.done
+      };
+      Object.keys(patch).forEach(function (k) {
+        payload[k] = patch[k];
+        note[k] = patch[k];
+      });
+      renderNotesFromCache();
+      return run('apiUpdateNote', id, payload).then(function () {
+        return afterWrite();
+      });
+    }
+
     function renderCategories() {
       var root = $('catList');
       root.innerHTML = '';
@@ -200,39 +411,23 @@
       }
       state.categories.forEach(function (c) {
         var div = document.createElement('div');
-        div.className = 'item';
+        div.className = 'item cat-item';
         div.innerHTML =
-          '<div><div>' +
+          '<div class="cat-row">' +
+          '<input type="text" class="cat-name-input" data-cat-id="' +
+          c.id +
+          '" value="' +
           escapeHtml(c.name) +
-          '</div></div>' +
-          '<div class="item-actions">' +
-          '<button type="button" class="btn small" data-cat-rename="' +
+          '" title="Название" />' +
+          '<button type="button" class="btn small cat-save" data-cat-save="' +
           c.id +
-          '">Переименовать</button>' +
-          '<button type="button" class="btn small" data-cat-del="' +
+          '">Сохранить</button>' +
+          '<button type="button" class="btn small cat-del" data-cat-del="' +
           c.id +
-          '">Удалить</button>' +
+          '" title="Удалить">×</button>' +
           '</div>';
         root.appendChild(div);
       });
-    }
-
-    function escapeHtml(s) {
-      return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    function resolveCategory(selectId, newInputId) {
-      var v = $(selectId).value;
-      if (v === NEW_CAT_VALUE) {
-        var name = $(newInputId).value.trim();
-        if (!name) throw new Error('Укажите название новой категории');
-        return { category: name, confirmNewCategory: true };
-      }
-      return { category: v, confirmNewCategory: false };
     }
 
     function applyPreset(name) {
@@ -264,21 +459,60 @@
       loadDashboard().catch(showError);
     }
 
-    function showError(err) {
-      alert(err && err.message ? err.message : String(err));
+    function openVoiceDialog(parsed, rawText) {
+      var draft = (parsed && parsed.draft) || { rawText: rawText };
+      state.voiceDraft = draft;
+      $('voiceRaw').textContent = '«' + rawText + '»';
+      var hint = $('voiceParseHint');
+      if (parsed && !parsed.ok && parsed.error) {
+        hint.textContent = parsed.error;
+        hint.classList.remove('hidden');
+      } else {
+        hint.textContent = '';
+        hint.classList.add('hidden');
+      }
+      $('voiceType').value = draft.type || 'expense';
+      $('voiceAmount').value = draft.amount != null ? draft.amount : '';
+      $('voiceComment').value = draft.comment || '';
+      $('voiceCategory').value = draft.category || '';
+      if (draft.categoryIsNew && draft.category) {
+        $('voiceNewHint').classList.remove('hidden');
+      } else {
+        $('voiceNewHint').classList.add('hidden');
+      }
+      syncCategoryVisibility('voiceType', 'voiceCategoryWrap');
+      $('dlgVoice').showModal();
     }
 
-    // Tabs
+    function openNoteDialog(mode, parsed, rawText, existing) {
+      state.noteEditMode = mode;
+      var draft = (parsed && parsed.draft) || existing || {};
+      state.noteDraft = draft;
+      $('noteEditId').value = existing ? existing.id : '';
+      $('noteDlgTitle').textContent =
+        mode === 'edit' ? 'Редактирование заметки' : 'Подтверждение — заметка';
+      $('noteSaveBtn').textContent = mode === 'edit' ? 'Сохранить' : 'Записать';
+      $('noteDeleteBtn').classList.toggle('hidden', mode !== 'edit');
+      $('noteRaw').textContent = rawText ? '«' + rawText + '»' : '';
+      $('noteRaw').classList.toggle('hidden', !rawText);
+      var hint = $('noteParseHint');
+      if (parsed && !parsed.ok && parsed.error) {
+        hint.textContent = parsed.error;
+        hint.classList.remove('hidden');
+      } else {
+        hint.textContent = '';
+        hint.classList.add('hidden');
+      }
+      $('noteTextField').value = draft.text || (existing && existing.text) || '';
+      $('noteDueDate').value = draft.dueDate || (existing && existing.dueDate) || '';
+      $('noteDueTime').value = draft.dueTime || (existing && existing.dueTime) || '';
+      $('noteDone').checked = !!(existing && existing.done);
+      $('dlgNote').showModal();
+    }
+
     document.querySelectorAll('.tab').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        document.querySelectorAll('.tab').forEach(function (b) {
-          b.classList.remove('active');
-        });
-        document.querySelectorAll('.tab-panel').forEach(function (p) {
-          p.classList.remove('active');
-        });
-        btn.classList.add('active');
-        $('tab-' + btn.getAttribute('data-tab')).classList.add('active');
+        setActiveTab(btn.getAttribute('data-tab'));
       });
     });
 
@@ -300,9 +534,49 @@
       loadDashboard().catch(showError);
     });
 
-    bindCategoryUi('addType', 'addCategory', 'addNewCatWrap', 'addCategoryWrap');
-    bindCategoryUi('editType', 'editCategory', 'editNewCatWrap', 'editCategoryWrap');
-    bindCategoryUi('voiceType', 'voiceCategory', 'voiceNewCatWrap', 'voiceCategoryWrap');
+    $('showDoneNotes').addEventListener('change', function () {
+      loadNotes().catch(showError);
+    });
+
+    bindCategoryUi('addType', 'addCategoryWrap');
+    bindCategoryUi('editType', 'editCategoryWrap');
+    bindCategoryUi('voiceType', 'voiceCategoryWrap');
+
+    $('btnFinanceSend').addEventListener('click', function () {
+      var text = $('financeText').value.trim();
+      if (!text) return;
+      run('apiParseNote', text)
+        .then(function (parsed) {
+          $('financeText').value = '';
+          openVoiceDialog(parsed, text);
+        })
+        .catch(showError);
+    });
+
+    $('financeText').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        $('btnFinanceSend').click();
+      }
+    });
+
+    $('btnTodoSend').addEventListener('click', function () {
+      var text = $('todoText').value.trim();
+      if (!text) return;
+      run('apiParseTodoNote', text)
+        .then(function (parsed) {
+          $('todoText').value = '';
+          openNoteDialog('create', parsed, text);
+        })
+        .catch(showError);
+    });
+
+    $('todoText').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        $('btnTodoSend').click();
+      }
+    });
 
     $('formAdd').addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -314,7 +588,7 @@
           source: 'manual'
         };
         if (payload.type === 'expense') {
-          var cat = resolveCategory('addCategory', 'addNewCategory');
+          var cat = resolveCategoryInput('addCategory');
           payload.category = cat.category;
           payload.confirmNewCategory = cat.confirmNewCategory;
         }
@@ -322,7 +596,7 @@
           .then(function () {
             $('formAdd').reset();
             $('addType').value = 'expense';
-            return loadDashboard();
+            return afterWrite();
           })
           .catch(showError);
       } catch (e) {
@@ -337,31 +611,89 @@
       if (delId) {
         if (!confirm('Удалить запись?')) return;
         run('apiDeleteTransaction', delId)
-          .then(loadDashboard)
+          .then(afterWrite)
           .catch(showError);
       }
     });
 
+    $('notesList').addEventListener('click', function (ev) {
+      var editId = ev.target.getAttribute('data-note-edit');
+      var delId = ev.target.getAttribute('data-note-del');
+      if (editId) {
+        var cached = null;
+        for (var i = 0; i < state.notes.length; i++) {
+          if (state.notes[i].id === editId) {
+            cached = state.notes[i];
+            break;
+          }
+        }
+        if (cached) openNoteDialog('edit', null, '', cached);
+        else {
+          run('apiGetNote', editId)
+            .then(function (note) {
+              openNoteDialog('edit', null, '', note);
+            })
+            .catch(showError);
+        }
+      }
+      if (delId) {
+        if (!confirm('Удалить заметку?')) return;
+        run('apiDeleteNote', delId)
+          .then(afterWrite)
+          .catch(showError);
+      }
+    });
+
+    $('notesList').addEventListener('change', function (ev) {
+      var t = ev.target;
+      var doneId = t.getAttribute('data-note-done');
+      var dateId = t.getAttribute('data-note-date');
+      var timeId = t.getAttribute('data-note-time');
+      if (doneId) {
+        patchNoteFromList(doneId, { done: !!t.checked })
+          .catch(function (err) {
+            showError(err);
+            afterWrite();
+          });
+        return;
+      }
+      if (dateId) {
+        patchNoteFromList(dateId, { dueDate: t.value || '' })
+          .catch(function (err) {
+            showError(err);
+            afterWrite();
+          });
+        return;
+      }
+      if (timeId) {
+        patchNoteFromList(timeId, { dueTime: t.value || '' })
+          .catch(function (err) {
+            showError(err);
+            afterWrite();
+          });
+      }
+    });
+
     function openEdit(id) {
-      Promise.all([run('apiGetTransaction', id), run('apiListCategories')])
-        .then(function (pair) {
-          var t = pair[0];
-          state.categories = pair[1];
-          $('editId').value = t.id;
-          $('editDate').value = toDatetimeLocal(t.date);
-          $('editType').value = t.type;
-          $('editAmount').value = t.amount;
-          $('editComment').value = t.comment || '';
-          fillCategorySelect($('editCategory'), t.category || null, true);
-          syncCategoryVisibility(
-            'editType',
-            'editCategoryWrap',
-            'editNewCatWrap',
-            'editCategory'
-          );
-          $('dlgEdit').showModal();
-        })
-        .catch(showError);
+      var t = null;
+      for (var i = 0; i < state.transactions.length; i++) {
+        if (state.transactions[i].id === id) {
+          t = state.transactions[i];
+          break;
+        }
+      }
+      if (!t) {
+        showError(new Error('Запись не найдена'));
+        return;
+      }
+      $('editId').value = t.id;
+      $('editDate').value = toDatetimeLocal(t.date);
+      $('editType').value = t.type;
+      $('editAmount').value = t.amount;
+      $('editComment').value = t.comment || '';
+      $('editCategory').value = t.category || '';
+      syncCategoryVisibility('editType', 'editCategoryWrap');
+      $('dlgEdit').showModal();
     }
 
     $('btnEditCancel').addEventListener('click', function () {
@@ -379,7 +711,7 @@
           date: $('editDate').value
         };
         if (payload.type === 'expense') {
-          var cat = resolveCategory('editCategory', 'editNewCategory');
+          var cat = resolveCategoryInput('editCategory');
           payload.category = cat.category;
           payload.confirmNewCategory = cat.confirmNewCategory;
         } else {
@@ -388,7 +720,7 @@
         run('apiUpdateTransaction', id, payload)
           .then(function () {
             $('dlgEdit').close();
-            return loadDashboard();
+            return afterWrite();
           })
           .catch(showError);
       } catch (e) {
@@ -401,54 +733,64 @@
       run('apiAddCategory', $('newCatName').value)
         .then(function () {
           $('newCatName').value = '';
-          return loadDashboard();
+          return afterWrite();
         })
         .catch(showError);
     });
 
     $('catList').addEventListener('click', function (ev) {
-      var renameId = ev.target.getAttribute('data-cat-rename');
+      var saveId = ev.target.getAttribute('data-cat-save');
       var delId = ev.target.getAttribute('data-cat-del');
-      if (renameId) {
-        var cat = state.categories.filter(function (c) {
-          return c.id === renameId;
-        })[0];
-        var name = prompt('Новое название', cat ? cat.name : '');
-        if (!name) return;
-        run('apiRenameCategory', renameId, name)
-          .then(loadDashboard)
+      if (saveId) {
+        var input = document.querySelector('.cat-name-input[data-cat-id="' + saveId + '"]');
+        var name = input ? input.value.trim() : '';
+        if (!name) {
+          alert('Укажите название');
+          return;
+        }
+        run('apiRenameCategory', saveId, name)
+          .then(afterWrite)
           .catch(showError);
       }
       if (delId) {
-        run('apiGetCategoryUsage', delId)
-          .then(function (usage) {
-            if (usage.count === 0) {
-              if (!confirm('Удалить категорию «' + usage.name + '»?')) return;
-              return run('apiDeleteCategory', delId, '').then(loadDashboard);
-            }
-            $('replaceCatId').value = delId;
-            $('replaceCatText').textContent =
-              'Категория «' +
-              usage.name +
-              '» используется в ' +
-              usage.count +
-              ' записях. Выберите замену:';
-            var sel = $('replaceCatSelect');
-            sel.innerHTML = '';
-            state.categories.forEach(function (c) {
-              if (c.id === delId) return;
-              var opt = document.createElement('option');
-              opt.value = c.name;
-              opt.textContent = c.name;
-              sel.appendChild(opt);
-            });
-            if (!sel.options.length) {
-              alert('Сначала добавьте другую категорию для замены.');
-              return;
-            }
-            $('dlgReplaceCat').showModal();
-          })
-          .catch(showError);
+        var usageName = state.categories.filter(function (c) {
+          return c.id === delId;
+        })[0];
+        var usageCount = state.transactions.filter(function (t) {
+          return (
+            usageName &&
+            t.category &&
+            t.category.toLowerCase() === usageName.name.toLowerCase()
+          );
+        }).length;
+        if (usageCount === 0) {
+          if (!confirm('Удалить категорию «' + (usageName ? usageName.name : '') + '»?')) return;
+          run('apiDeleteCategory', delId, '')
+            .then(afterWrite)
+            .catch(showError);
+          return;
+        }
+        $('replaceCatId').value = delId;
+        $('replaceCatText').textContent =
+          'Категория «' +
+          usageName.name +
+          '» используется в ' +
+          usageCount +
+          ' записях. Выберите замену:';
+        var sel = $('replaceCatSelect');
+        sel.innerHTML = '';
+        state.categories.forEach(function (c) {
+          if (c.id === delId) return;
+          var opt = document.createElement('option');
+          opt.value = c.name;
+          opt.textContent = c.name;
+          sel.appendChild(opt);
+        });
+        if (!sel.options.length) {
+          alert('Сначала добавьте другую категорию для замены.');
+          return;
+        }
+        $('dlgReplaceCat').showModal();
       }
     });
 
@@ -461,250 +803,10 @@
       run('apiDeleteCategory', $('replaceCatId').value, $('replaceCatSelect').value)
         .then(function () {
           $('dlgReplaceCat').close();
-          return loadDashboard();
+          return afterWrite();
         })
         .catch(showError);
     });
-
-    // Voice: MediaRecorder → Gemini (not Web Speech API)
-    var voiceState = {
-      recorder: null,
-      chunks: [],
-      stream: null,
-      timer: null,
-      mimeType: ''
-    };
-
-    function parseAndOpen(text) {
-      text = String(text || '').trim();
-      if (!text) {
-        $('voiceStatus').textContent = 'Введите или скажите фразу.';
-        return;
-      }
-      $('voiceStatus').textContent = 'Разбираю…';
-      run('apiParseNote', text)
-        .then(function (parsed) {
-          openVoiceDialog(parsed, text);
-          $('voiceStatus').textContent = 'Проверьте и подтвердите.';
-        })
-        .catch(showError);
-    }
-
-    function blobToBase64(blob) {
-      return new Promise(function (resolve, reject) {
-        var reader = new FileReader();
-        reader.onloadend = function () {
-          var dataUrl = String(reader.result || '');
-          var comma = dataUrl.indexOf(',');
-          resolve(comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    }
-
-    function pickRecorderMime() {
-      var candidates = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/mp4',
-        'audio/ogg;codecs=opus'
-      ];
-      if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) {
-        return '';
-      }
-      for (var i = 0; i < candidates.length; i++) {
-        if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
-      }
-      return '';
-    }
-
-    function stopVoiceTracks() {
-      if (voiceState.timer) {
-        clearTimeout(voiceState.timer);
-        voiceState.timer = null;
-      }
-      if (voiceState.stream) {
-        voiceState.stream.getTracks().forEach(function (t) {
-          t.stop();
-        });
-        voiceState.stream = null;
-      }
-      $('btnVoice').classList.remove('hidden');
-      $('btnVoiceStop').classList.add('hidden');
-    }
-
-    function sendAudioBlob(blob, mimeType) {
-      if (!blob || !blob.size) {
-        $('voiceStatus').textContent = 'Пустая запись. Попробуйте ещё раз.';
-        return;
-      }
-      if (blob.size > 3 * 1024 * 1024) {
-        $('voiceStatus').textContent = 'Файл слишком большой. Запишите короче (до 15 сек).';
-        return;
-      }
-      $('voiceStatus').textContent = 'Отправляю в Gemini…';
-      blobToBase64(blob)
-        .then(function (b64) {
-          return run('apiParseAudioNote', b64, mimeType || blob.type || 'audio/webm');
-        })
-        .then(function (parsed) {
-          var raw =
-            (parsed.draft && parsed.draft.rawText) ||
-            (parsed.draft && parsed.draft.comment) ||
-            '[голос]';
-          if (parsed.draft && parsed.draft.rawText) {
-            $('noteText').value = parsed.draft.rawText;
-          }
-          openVoiceDialog(parsed, raw);
-          $('voiceStatus').textContent = 'Проверьте и подтвердите.';
-        })
-        .catch(function (err) {
-          $('voiceStatus').textContent =
-            'Не удалось разобрать голос. ' + (err && err.message ? err.message : String(err));
-        });
-    }
-
-    function startVoiceRecording() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        $('voiceStatus').textContent =
-          'Микрофон недоступен. На телефоне выберите файл через «аудиофайл» или введите текст.';
-        return;
-      }
-      if (!window.MediaRecorder) {
-        $('voiceStatus').textContent =
-          'Запись не поддерживается. Используйте аудиофайл или текст.';
-        return;
-      }
-
-      var mime = pickRecorderMime();
-      $('voiceStatus').textContent = 'Запрос микрофона…';
-
-      navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then(function (stream) {
-          voiceState.stream = stream;
-          voiceState.chunks = [];
-          voiceState.mimeType = mime;
-          var options = mime ? { mimeType: mime } : undefined;
-          var recorder;
-          try {
-            recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
-          } catch (e) {
-            recorder = new MediaRecorder(stream);
-          }
-          voiceState.recorder = recorder;
-          voiceState.mimeType = recorder.mimeType || mime || 'audio/webm';
-
-          recorder.ondataavailable = function (ev) {
-            if (ev.data && ev.data.size) voiceState.chunks.push(ev.data);
-          };
-          recorder.onerror = function () {
-            $('voiceStatus').textContent = 'Ошибка записи. Попробуйте аудиофайл или текст.';
-            stopVoiceTracks();
-          };
-          recorder.onstop = function () {
-            var blob = new Blob(voiceState.chunks, { type: voiceState.mimeType });
-            stopVoiceTracks();
-            sendAudioBlob(blob, voiceState.mimeType);
-          };
-
-          recorder.start(250);
-          $('btnVoice').classList.add('hidden');
-          $('btnVoiceStop').classList.remove('hidden');
-          $('voiceStatus').textContent = 'Идёт запись… нажмите «Стоп» (макс. 15 сек).';
-          voiceState.timer = setTimeout(function () {
-            if (voiceState.recorder && voiceState.recorder.state === 'recording') {
-              voiceState.recorder.stop();
-            }
-          }, 15000);
-        })
-        .catch(function (err) {
-          var name = (err && err.name) || '';
-          if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-            $('voiceStatus').textContent =
-              'Микрофон в оболочке Google недоступен. Используйте «Голос (файл)» или диктовку в поле фразы.';
-            $('audioFile').click();
-          } else if (name === 'NotFoundError') {
-            $('voiceStatus').textContent = 'Микрофон не найден.';
-          } else {
-            $('voiceStatus').textContent =
-              'Не удалось открыть микрофон (' +
-              name +
-              '). Используйте аудиофайл или текст.';
-          }
-        });
-    }
-
-    function stopVoiceRecording() {
-      if (voiceState.recorder && voiceState.recorder.state === 'recording') {
-        $('voiceStatus').textContent = 'Обрабатываю запись…';
-        voiceState.recorder.stop();
-      } else {
-        stopVoiceTracks();
-      }
-    }
-
-    $('btnVoice').addEventListener('click', function () {
-      // Primary path in GAS iframe: system recorder / file picker
-      $('audioFile').click();
-    });
-
-    $('btnVoiceMic').addEventListener('click', startVoiceRecording);
-    $('btnVoiceStop').addEventListener('click', stopVoiceRecording);
-
-    $('audioFile').addEventListener('change', function (ev) {
-      var file = ev.target.files && ev.target.files[0];
-      ev.target.value = '';
-      if (!file) return;
-      sendAudioBlob(file, file.type || 'audio/mp4');
-    });
-
-    $('btnParseNote').addEventListener('click', function () {
-      parseAndOpen($('noteText').value);
-    });
-
-    $('noteText').addEventListener('keydown', function (ev) {
-      if (ev.key === 'Enter') {
-        ev.preventDefault();
-        parseAndOpen($('noteText').value);
-      }
-    });
-
-    function openVoiceDialog(parsed, rawText) {
-      var draft = (parsed && parsed.draft) || { rawText: rawText };
-      state.voiceDraft = draft;
-
-      $('voiceRaw').textContent = '«' + rawText + '»';
-      var hint = $('voiceParseHint');
-      if (parsed && !parsed.ok && parsed.error) {
-        hint.textContent = parsed.error;
-        hint.classList.remove('hidden');
-      } else {
-        hint.textContent = '';
-        hint.classList.add('hidden');
-      }
-
-      $('voiceType').value = draft.type || 'expense';
-      $('voiceAmount').value = draft.amount != null ? draft.amount : '';
-      $('voiceComment').value = draft.comment || '';
-      fillCategorySelect($('voiceCategory'), draft.category || null, true);
-      if (draft.categoryIsNew && draft.category) {
-        $('voiceCategory').value = NEW_CAT_VALUE;
-        $('voiceNewCategory').value = draft.category;
-        $('voiceNewHint').classList.remove('hidden');
-      } else {
-        $('voiceNewCategory').value = '';
-        $('voiceNewHint').classList.add('hidden');
-      }
-      syncCategoryVisibility(
-        'voiceType',
-        'voiceCategoryWrap',
-        'voiceNewCatWrap',
-        'voiceCategory'
-      );
-      $('dlgVoice').showModal();
-    }
 
     $('btnVoiceCancel').addEventListener('click', function () {
       $('dlgVoice').close();
@@ -717,19 +819,20 @@
           type: $('voiceType').value,
           amount: Number($('voiceAmount').value),
           comment: $('voiceComment').value,
-          source: 'web_voice',
+          source: 'web_text',
           rawText: (state.voiceDraft && state.voiceDraft.rawText) || ''
         };
         if (payload.type === 'expense') {
-          var cat = resolveCategory('voiceCategory', 'voiceNewCategory');
+          var cat = resolveCategoryInput('voiceCategory');
           payload.category = cat.category;
           payload.confirmNewCategory = cat.confirmNewCategory;
         }
         run('apiCreateTransaction', payload)
           .then(function () {
             $('dlgVoice').close();
-            $('voiceStatus').textContent = 'Сохранено.';
-            return loadDashboard();
+            return afterWrite().then(function () {
+              setActiveTab('finance');
+            });
           })
           .catch(showError);
       } catch (e) {
@@ -737,6 +840,48 @@
       }
     });
 
-    loadDashboard().catch(showError);
+    $('btnNoteCancel').addEventListener('click', function () {
+      $('dlgNote').close();
+    });
+
+    $('noteDeleteBtn').addEventListener('click', function () {
+      var id = $('noteEditId').value;
+      if (!id || !confirm('Удалить заметку?')) return;
+      run('apiDeleteNote', id)
+        .then(function () {
+          $('dlgNote').close();
+          return afterWrite();
+        })
+        .catch(showError);
+    });
+
+    $('formNote').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var payload = {
+        text: $('noteTextField').value.trim(),
+        dueDate: $('noteDueDate').value || '',
+        dueTime: $('noteDueTime').value || '',
+        done: $('noteDone').checked,
+        rawText: (state.noteDraft && state.noteDraft.rawText) || ''
+      };
+      if (!payload.text) {
+        alert('Укажите текст заметки');
+        return;
+      }
+      var id = $('noteEditId').value;
+      var p =
+        state.noteEditMode === 'edit'
+          ? run('apiUpdateNote', id, payload)
+          : run('apiCreateNote', Object.assign({ source: 'web_text' }, payload));
+      p.then(function () {
+        $('dlgNote').close();
+        return afterWrite().then(function () {
+          setActiveTab('notes');
+        });
+      }).catch(showError);
+    });
+
+    setActiveTab('home');
+    loadBootstrap().catch(showError);
   })();
 </script>

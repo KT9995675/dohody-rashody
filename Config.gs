@@ -1,5 +1,6 @@
 var SHEET_TRANSACTIONS = 'Transactions';
 var SHEET_CATEGORIES = 'Categories';
+var SHEET_NOTES = 'Notes';
 
 var TX_HEADERS = [
   'id',
@@ -14,6 +15,17 @@ var TX_HEADERS = [
 ];
 
 var CAT_HEADERS = ['id', 'name', 'createdAt'];
+
+var NOTE_HEADERS = [
+  'id',
+  'createdAt',
+  'dueDate',
+  'dueTime',
+  'text',
+  'done',
+  'source',
+  'rawText'
+];
 
 var PROP_OWNER_EMAIL = 'OWNER_EMAIL';
 var PROP_GEMINI_API_KEY = 'GEMINI_API_KEY';

@@ -1,5 +1,6 @@
 /**
- * @return {Array<{id:string,name:string,createdAt:string}>}
+ * Category helpers for expense labels.
+ * replaceCategoryInTransactions_ writes per-cell to avoid setValues size errors.
  */
 function listCategories() {
   var sheet = getCatSheet_();
@@ -20,6 +21,30 @@ function listCategories() {
     .sort(function (a, b) {
       return a.name.localeCompare(b.name, 'ru');
     });
+}
+
+/** Category names for Gemini prompts — cached ~2 min. */
+function listCategoryNamesCached_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('cat_names_v1');
+  if (hit) {
+    try {
+      return JSON.parse(hit);
+    } catch (ignore) {}
+  }
+  var names = listCategories().map(function (c) {
+    return c.name;
+  });
+  try {
+    cache.put('cat_names_v1', JSON.stringify(names), 120);
+  } catch (ignore) {}
+  return names;
+}
+
+function invalidateCategoryNamesCache_() {
+  try {
+    CacheService.getScriptCache().remove('cat_names_v1');
+  } catch (ignore) {}
 }
 
 /**
@@ -49,6 +74,7 @@ function addCategory(name) {
   var sheet = getCatSheet_();
   var row = [newId_(), name, new Date()];
   sheet.appendRow(row);
+  invalidateCategoryNamesCache_();
   return { id: row[0], name: row[1], createdAt: toIso_(row[2]) };
 }
 
@@ -95,6 +121,7 @@ function renameCategory(id, newName) {
 
   sheet.getRange(rowIndex, 2).setValue(newName);
   replaceCategoryInTransactions_(oldName, newName);
+  invalidateCategoryNamesCache_();
   return { id: id, name: newName };
 }
 
@@ -138,6 +165,7 @@ function deleteCategory(id, replacementName) {
   }
 
   sheet.deleteRow(rowIndex);
+  invalidateCategoryNamesCache_();
   return { ok: true, deleted: name, replacedWith: usage > 0 ? replacementName : null };
 }
 
@@ -159,16 +187,13 @@ function replaceCategoryInTransactions_(oldName, newName) {
   var sheet = getTxSheet_();
   var last = sheet.getLastRow();
   if (last < 2) return;
-  var range = sheet.getRange(2, 6, last, 6);
-  var values = range.getValues();
-  var changed = false;
+  // Per-cell write: avoids setValues row-count mismatch on odd sheet shapes.
+  var values = sheet.getRange(2, 6, last, 6).getValues();
   for (var i = 0; i < values.length; i++) {
     if (String(values[i][0]).toLowerCase() === needle) {
-      values[i][0] = newName;
-      changed = true;
+      sheet.getRange(i + 2, 6).setValue(newName);
     }
   }
-  if (changed) range.setValues(values);
 }
 
 /**

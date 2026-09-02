@@ -155,9 +155,13 @@ function updateTransaction(id, payload) {
   var comment =
     payload.comment != null ? String(payload.comment) : found.data.comment;
 
-  sheet.getRange(found.rowIndex, 3, found.rowIndex, 7).setValues([
-    [date, type, roundMoney_(amount), category, comment]
-  ]);
+  var row = found.rowIndex;
+  // Per-cell writes: setValues on a multi-cell range fails if the sheet has merges.
+  sheet.getRange(row, 3).setValue(date);
+  sheet.getRange(row, 4).setValue(type);
+  sheet.getRange(row, 5).setValue(roundMoney_(amount));
+  sheet.getRange(row, 6).setValue(category);
+  sheet.getRange(row, 7).setValue(comment);
 
   return getTransaction(id);
 }

@@ -39,6 +39,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.saveButton.setOnClickListener {
             prefs.webAppUrl = binding.urlInput.text?.toString().orEmpty()
             prefs.token = binding.tokenInput.text?.toString().orEmpty()
+            Repository.invalidate()
             Toast.makeText(this, "Сохранено", Toast.LENGTH_SHORT).show()
             loadCategories()
         }
@@ -57,7 +58,8 @@ class SettingsActivity : AppCompatActivity() {
                             json.optString("error", "Ошибка")
                         }
                 } catch (e: Exception) {
-                    binding.pingResult.text = e.message
+                    e.rethrowIfCancellation()
+                    binding.pingResult.text = e.userMessage()
                 }
             }
         }
@@ -82,14 +84,18 @@ class SettingsActivity : AppCompatActivity() {
         }
         lifecycleScope.launch {
             try {
-                val list = withContext(Dispatchers.IO) { client.listCategories() }
+                val repo = Repository.get(this@SettingsActivity)
+                repo.ensureLoaded(force = true)
                 categories.clear()
-                categories.addAll(list)
+                categories.addAll(repo.categories())
                 adapter.submit(categories)
                 binding.categoriesEmpty.visibility =
                     if (categories.isEmpty()) View.VISIBLE else View.GONE
             } catch (e: Exception) {
-                Toast.makeText(this@SettingsActivity, e.message, Toast.LENGTH_LONG).show()
+                e.rethrowIfCancellation()
+                e.userMessage()?.let {
+                    Toast.makeText(this@SettingsActivity, it, Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -101,15 +107,13 @@ class SettingsActivity : AppCompatActivity() {
         }
         val name = binding.newCategoryInput.text?.toString()?.trim().orEmpty()
         if (name.isBlank()) return
-        lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) { client.addCategory(name) }
-                binding.newCategoryInput.setText("")
-                loadCategories()
-            } catch (e: Exception) {
-                Toast.makeText(this@SettingsActivity, e.message, Toast.LENGTH_LONG).show()
-            }
-        }
+        Repository.get(this).addCategory(name)
+        binding.newCategoryInput.setText("")
+        categories.clear()
+        categories.addAll(Repository.get(this).categories())
+        adapter.submit(categories)
+        binding.categoriesEmpty.visibility =
+            if (categories.isEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun promptRename(cat: Category) {
@@ -124,14 +128,10 @@ class SettingsActivity : AppCompatActivity() {
             .setPositiveButton(R.string.save) { _, _ ->
                 val name = input.text?.toString()?.trim().orEmpty()
                 if (name.isBlank()) return@setPositiveButton
-                lifecycleScope.launch {
-                    try {
-                        withContext(Dispatchers.IO) { client.renameCategory(cat.id, name) }
-                        loadCategories()
-                    } catch (e: Exception) {
-                        Toast.makeText(this@SettingsActivity, e.message, Toast.LENGTH_LONG).show()
-                    }
-                }
+                Repository.get(this).renameCategory(cat.id, name)
+                categories.clear()
+                categories.addAll(Repository.get(this).categories())
+                adapter.submit(categories)
             }
             .show()
     }
@@ -139,46 +139,50 @@ class SettingsActivity : AppCompatActivity() {
     private fun promptDelete(cat: Category) {
         lifecycleScope.launch {
             try {
-                val (name, count) = withContext(Dispatchers.IO) { client.categoryUsage(cat.id) }
-                if (count == 0) {
+                val repo = Repository.get(this@SettingsActivity)
+                val list = repo.categories()
+                val usageCount = repo.snapshotOrNull()?.transactions
+                    ?.count { it.category.equals(cat.name, ignoreCase = true) } ?: 0
+                if (usageCount == 0) {
                     MaterialAlertDialogBuilder(this@SettingsActivity)
-                        .setTitle("Удалить «$name»?")
+                        .setTitle("Удалить «${cat.name}»?")
                         .setNegativeButton(R.string.cancel, null)
                         .setPositiveButton(R.string.delete) { _, _ -> doDelete(cat.id, null) }
                         .show()
                 } else {
-                    val others = categories.filter { it.id != cat.id }.map { it.name }.toTypedArray()
+                    val others = list.filter { it.id != cat.id }.map { it.name }.toTypedArray()
                     if (others.isEmpty()) {
                         Toast.makeText(
                             this@SettingsActivity,
-                            "Сначала добавьте категорию для замены ($count записей)",
+                            "Сначала добавьте категорию для замены ($usageCount записей)",
                             Toast.LENGTH_LONG
                         ).show()
                         return@launch
                     }
                     var chosen = others[0]
                     MaterialAlertDialogBuilder(this@SettingsActivity)
-                        .setTitle("Заменить в $count записях")
+                        .setTitle("Заменить в $usageCount записях")
                         .setSingleChoiceItems(others, 0) { _, which -> chosen = others[which] }
                         .setNegativeButton(R.string.cancel, null)
                         .setPositiveButton(R.string.delete) { _, _ -> doDelete(cat.id, chosen) }
                         .show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(this@SettingsActivity, e.message, Toast.LENGTH_LONG).show()
+                e.rethrowIfCancellation()
+                e.userMessage()?.let {
+                    Toast.makeText(this@SettingsActivity, it, Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
 
     private fun doDelete(id: String, replacement: String?) {
-        lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) { client.deleteCategory(id, replacement) }
-                loadCategories()
-            } catch (e: Exception) {
-                Toast.makeText(this@SettingsActivity, e.message, Toast.LENGTH_LONG).show()
-            }
-        }
+        Repository.get(this).deleteCategory(id, replacement)
+        categories.clear()
+        categories.addAll(Repository.get(this).categories())
+        adapter.submit(categories)
+        binding.categoriesEmpty.visibility =
+            if (categories.isEmpty()) View.VISIBLE else View.GONE
     }
 
     private class CategoryAdapter(

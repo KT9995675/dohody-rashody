@@ -43,6 +43,30 @@ function saveGeminiSettings(apiKey, model) {
   };
 }
 
+/**
+ * Gemini 3 defaults to heavy thinking (slow). Prefer minimal / budget 0.
+ * @param {string} model
+ * @return {Object}
+ */
+function geminiThinkingConfig_(model) {
+  var m = String(model || '').toLowerCase();
+  if (m.indexOf('gemini-3') === 0) {
+    return { thinkingLevel: 'minimal' };
+  }
+  return { thinkingBudget: 0 };
+}
+
+function geminiGenerationConfig_(model, schema) {
+  var cfg = {
+    temperature: 0,
+    maxOutputTokens: 512,
+    responseMimeType: 'application/json',
+    thinkingConfig: geminiThinkingConfig_(model)
+  };
+  if (schema) cfg.responseSchema = schema;
+  return cfg;
+}
+
 var FINANCE_JSON_SCHEMA_ = {
   type: 'object',
   properties: {
@@ -75,9 +99,10 @@ function financeSystemPrompt_(categoryNames) {
 /**
  * @param {string} systemText
  * @param {Array} userParts Gemini content parts (text and/or inlineData)
+ * @param {Object=} schema
  * @return {string}
  */
-function geminiCompleteParts_(systemText, userParts) {
+function geminiCompleteParts_(systemText, userParts, schema) {
   var s = getGeminiSettings_();
   if (!s.apiKey) {
     throw new Error(
@@ -92,6 +117,7 @@ function geminiCompleteParts_(systemText, userParts) {
     ':generateContent?key=' +
     encodeURIComponent(s.apiKey);
 
+  var useSchema = schema === undefined ? FINANCE_JSON_SCHEMA_ : schema;
   var payload = {
     systemInstruction: {
       parts: [{ text: systemText }]
@@ -102,15 +128,7 @@ function geminiCompleteParts_(systemText, userParts) {
         parts: userParts
       }
     ],
-    generationConfig: {
-      temperature: 0,
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json',
-      responseSchema: FINANCE_JSON_SCHEMA_,
-      thinkingConfig: {
-        thinkingBudget: 0
-      }
-    }
+    generationConfig: geminiGenerationConfig_(s.model, useSchema)
   };
 
   var resp = UrlFetchApp.fetch(url, {
@@ -123,8 +141,11 @@ function geminiCompleteParts_(systemText, userParts) {
   var code = resp.getResponseCode();
   var body = resp.getContentText();
   if (code < 200 || code >= 300) {
-    if (code === 400 && /thinkingConfig|responseSchema|Unknown name/i.test(body)) {
-      return geminiCompletePartsSimple_(url, systemText, userParts);
+    if (
+      code === 400 &&
+      /thinkingConfig|thinkingLevel|thinkingBudget|responseSchema|Unknown name/i.test(body)
+    ) {
+      return geminiCompletePartsRetry_(url, systemText, userParts, useSchema, body);
     }
     throw new Error('Gemini HTTP ' + code + ': ' + body.slice(0, 500));
   }
@@ -132,28 +153,52 @@ function geminiCompleteParts_(systemText, userParts) {
   return extractGeminiText_(body);
 }
 
-function geminiCompletePartsSimple_(url, systemText, userParts) {
-  var payload = {
-    systemInstruction: { parts: [{ text: systemText }] },
-    contents: [{ role: 'user', parts: userParts }],
-    generationConfig: {
-      temperature: 0,
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json'
-    }
-  };
-  var resp = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-  var code = resp.getResponseCode();
-  var body = resp.getContentText();
-  if (code < 200 || code >= 300) {
-    throw new Error('Gemini HTTP ' + code + ': ' + body.slice(0, 500));
+/**
+ * Retry with the other thinking knob, then without thinkingConfig.
+ */
+function geminiCompletePartsRetry_(url, systemText, userParts, schema, firstErrorBody) {
+  var attempts = [];
+  if (/thinkingBudget/i.test(firstErrorBody) || /thinkingLevel/i.test(firstErrorBody)) {
+    attempts.push({ thinkingLevel: 'minimal' });
+    attempts.push({ thinkingBudget: 0 });
+  } else {
+    attempts.push({ thinkingBudget: 0 });
+    attempts.push({ thinkingLevel: 'minimal' });
   }
-  return extractGeminiText_(body);
+  attempts.push(null);
+
+  var lastErr = firstErrorBody;
+  for (var i = 0; i < attempts.length; i++) {
+    var cfg = {
+      temperature: 0,
+      maxOutputTokens: 512,
+      responseMimeType: 'application/json'
+    };
+    if (schema && i < attempts.length - 1) cfg.responseSchema = schema;
+    if (attempts[i]) cfg.thinkingConfig = attempts[i];
+
+    var payload = {
+      systemInstruction: { parts: [{ text: systemText }] },
+      contents: [{ role: 'user', parts: userParts }],
+      generationConfig: cfg
+    };
+    var resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    var body = resp.getContentText();
+    if (code >= 200 && code < 300) return extractGeminiText_(body);
+    lastErr = body;
+    if (code !== 400) break;
+  }
+  throw new Error('Gemini HTTP 400: ' + String(lastErr).slice(0, 500));
+}
+
+function geminiCompletePartsSimple_(url, systemText, userParts) {
+  return geminiCompletePartsRetry_(url, systemText, userParts, null, 'thinkingConfig');
 }
 
 /**
@@ -179,14 +224,10 @@ function extractGeminiText_(body) {
   var cand = data.candidates && data.candidates[0];
   if (!cand) throw new Error('Пустой ответ Gemini (нет candidates)');
 
-  if (cand.finishReason && cand.finishReason !== 'STOP' && cand.finishReason !== 'MAX_TOKENS') {
-    // STOP is ok; MAX_TOKENS may still have partial text
-  }
-
   var parts = (cand.content && cand.content.parts) || [];
   var text = parts
     .filter(function (p) {
-      return !p.thought; // skip thinking parts
+      return !p.thought;
     })
     .map(function (p) {
       return p.text || '';
@@ -222,7 +263,6 @@ function geminiParseFinanceAudio_(base64, mimeType, categoryNames) {
   mimeType = String(mimeType || 'audio/webm').split(';')[0];
   base64 = String(base64 || '').replace(/\s/g, '');
   if (!base64) throw new Error('Пустое аудио');
-  // google.script.run / UrlFetch safety ~ few MB
   if (base64.length > 4 * 1024 * 1024) {
     throw new Error('Аудио слишком длинное. Запишите короче (до ~15 сек).');
   }
@@ -257,4 +297,81 @@ function parseJsonFromLlm_(raw) {
   } catch (err) {
     throw new Error('Gemini вернул битый JSON: ' + t.slice(0, 200));
   }
+}
+
+var TODO_JSON_SCHEMA_ = {
+  type: 'object',
+  properties: {
+    text: { type: 'string' },
+    dueDate: { type: 'string', nullable: true },
+    dueTime: { type: 'string', nullable: true },
+    transcript: { type: 'string', nullable: true },
+    ok: { type: 'boolean' },
+    error: { type: 'string', nullable: true }
+  },
+  required: ['text', 'dueDate', 'dueTime', 'ok', 'error']
+};
+
+function todoSystemPrompt_() {
+  var today = todayYmdMoscow_();
+  return (
+    'Личные напоминания и задачи. Из фразы (текста или русской речи) извлеки одну заметку. ' +
+    'Сегодня по Москве: ' +
+    today +
+    '. ' +
+    'text — смысл заметки без даты и времени. ' +
+    'dueDate — дата выполнения yyyy-MM-dd или null (завтра, послезавтра, в понедельник → абсолютная дата). ' +
+    'dueTime — время HH:mm или null (если не названо). ' +
+    'ok=true если text не пустой.'
+  );
+}
+
+function geminiCompletePartsWithSchema_(systemText, userParts, schema) {
+  return geminiCompleteParts_(systemText, userParts, schema);
+}
+
+/**
+ * @param {string} noteText
+ * @return {Object}
+ */
+function geminiParseTodoNote_(noteText) {
+  var raw = geminiCompletePartsWithSchema_(
+    todoSystemPrompt_(),
+    [{ text: noteText }],
+    TODO_JSON_SCHEMA_
+  );
+  return parseJsonFromLlm_(raw);
+}
+
+/**
+ * @param {string} base64
+ * @param {string} mimeType
+ * @return {Object}
+ */
+function geminiParseTodoAudio_(base64, mimeType) {
+  mimeType = String(mimeType || 'audio/webm').split(';')[0];
+  base64 = String(base64 || '').replace(/\s/g, '');
+  if (!base64) throw new Error('Пустое аудио');
+  if (base64.length > 4 * 1024 * 1024) {
+    throw new Error('Аудио слишком длинное. Запишите короче (до ~15 сек).');
+  }
+
+  var parts = [
+    {
+      inlineData: {
+        mimeType: mimeType,
+        data: base64
+      }
+    },
+    {
+      text:
+        'Это голосовая заметка-напоминание на русском. Распознай речь и извлеки заметку в JSON.'
+    }
+  ];
+  var raw = geminiCompletePartsWithSchema_(
+    todoSystemPrompt_(),
+    parts,
+    TODO_JSON_SCHEMA_
+  );
+  return parseJsonFromLlm_(raw);
 }
