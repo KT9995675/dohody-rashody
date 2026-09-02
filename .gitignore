@@ -1,0 +1,16 @@
+.clasp.json
+.clasprc.json
+node_modules/
+.DS_Store
+.idea/
+android/.gradle/
+android/.gradle-dist/
+android/.jdk/
+android/.android-sdk/
+android/**/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/captures/
+*.apk
+*.aab

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div>
+          <p class="brand">Доходы–расходы</p>
+          <p class="muted" id="tzHint"></p>
+        </div>
+        <div class="balance-block">
+          <span class="muted">Баланс</span>
+          <strong id="balance" class="balance">—</strong>
+        </div>
+      </header>
+
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="ops">Записи</button>
+        <button type="button" class="tab" data-tab="cats">Категории</button>
+      </nav>
+
+      <section id="tab-ops" class="tab-panel active">
+        <div class="filters">
+          <div class="presets">
+            <button type="button" class="chip" data-preset="today">Сегодня</button>
+            <button type="button" class="chip" data-preset="week">Неделя</button>
+            <button type="button" class="chip" data-preset="month">Месяц</button>
+            <button type="button" class="chip active" data-preset="all">Всё время</button>
+          </div>
+          <div class="range">
+            <label>с <input type="date" id="dateFrom" /></label>
+            <label>по <input type="date" id="dateTo" /></label>
+            <button type="button" class="btn ghost" id="btnApplyRange">Показать</button>
+          </div>
+          <p class="period-sum muted" id="periodSum"></p>
+        </div>
+
+        <div class="panel">
+          <h2>Новая запись</h2>
+          <form id="formAdd" class="form">
+            <div class="row">
+              <label class="grow">
+                Тип
+                <select id="addType" required>
+                  <option value="expense">Расход</option>
+                  <option value="income">Доход</option>
+                </select>
+              </label>
+              <label class="grow">
+                Сумма, ₽
+                <input type="number" id="addAmount" min="0.01" step="0.01" required />
+              </label>
+            </div>
+            <label id="addCategoryWrap">
+              Категория
+              <select id="addCategory"></select>
+            </label>
+            <label id="addNewCatWrap" class="hidden">
+              Новая категория
+              <input type="text" id="addNewCategory" placeholder="Название" />
+            </label>
+            <label>
+              Комментарий
+              <input type="text" id="addComment" />
+            </label>
+            <div class="actions">
+              <button type="submit" class="btn primary">Сохранить</button>
+              <button type="button" class="btn" id="btnVoice">Голос (файл)</button>
+              <button type="button" class="btn ghost hidden" id="btnVoiceStop">Стоп</button>
+              <button type="button" class="btn ghost" id="btnVoiceMic" title="Попытка записи в браузере">Микрофон</button>
+            </div>
+            <input type="file" id="audioFile" class="hidden" accept="audio/*,video/mp4" capture />
+            <label>
+              Фраза для разбора
+              <input
+                type="text"
+                id="noteText"
+                placeholder="500 на еду кофе"
+              />
+            </label>
+            <div class="actions">
+              <button type="button" class="btn" id="btnParseNote">Разобрать фразу</button>
+            </div>
+            <p class="muted" id="voiceStatus">
+              В приложении Google микрофон браузера обычно заблокирован.
+              «Голос (файл)» — запись/выбор аудио → разбор Gemini. Либо диктовка с клавиатуры в поле фразы.
+            </p>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>Список</h2>
+          <div id="txList" class="list"></div>
+        </div>
+      </section>
+
+      <section id="tab-cats" class="tab-panel">
+        <div class="panel">
+          <h2>Категории расходов</h2>
+          <form id="formAddCat" class="form inline">
+            <input type="text" id="newCatName" placeholder="Новая категория" required />
+            <button type="submit" class="btn primary">Добавить</button>
+          </form>
+          <div id="catList" class="list"></div>
+        </div>
+      </section>
+    </div>
+
+    <dialog id="dlgEdit">
+      <form method="dialog" id="formEdit" class="form dialog-form">
+        <h2>Редактирование</h2>
+        <input type="hidden" id="editId" />
+        <label>
+          Дата
+          <input type="datetime-local" id="editDate" required />
+        </label>
+        <div class="row">
+          <label class="grow">
+            Тип
+            <select id="editType">
+              <option value="expense">Расход</option>
+              <option value="income">Доход</option>
+            </select>
+          </label>
+          <label class="grow">
+            Сумма, ₽
+            <input type="number" id="editAmount" min="0.01" step="0.01" required />
+          </label>
+        </div>
+        <label id="editCategoryWrap">
+          Категория
+          <select id="editCategory"></select>
+        </label>
+        <label id="editNewCatWrap" class="hidden">
+          Новая категория
+          <input type="text" id="editNewCategory" />
+        </label>
+        <label>
+          Комментарий
+          <input type="text" id="editComment" />
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn primary" value="save">Сохранить</button>
+          <button type="button" class="btn ghost" id="btnEditCancel">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlgVoice">
+      <form method="dialog" id="formVoice" class="form dialog-form">
+        <h2>Подтверждение</h2>
+        <p class="muted" id="voiceRaw"></p>
+        <p class="warn hidden" id="voiceParseHint"></p>
+        <div class="row">
+          <label class="grow">
+            Тип
+            <select id="voiceType">
+              <option value="expense">Расход</option>
+              <option value="income">Доход</option>
+            </select>
+          </label>
+          <label class="grow">
+            Сумма, ₽
+            <input type="number" id="voiceAmount" min="0.01" step="0.01" required />
+          </label>
+        </div>
+        <label id="voiceCategoryWrap">
+          Категория
+          <select id="voiceCategory"></select>
+        </label>
+        <label id="voiceNewCatWrap" class="hidden">
+          Новая категория
+          <input type="text" id="voiceNewCategory" />
+        </label>
+        <p id="voiceNewHint" class="warn hidden">Такой категории ещё нет — подтвердите создание или выберите другую.</p>
+        <label>
+          Комментарий
+          <input type="text" id="voiceComment" />
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn primary">Записать</button>
+          <button type="button" class="btn ghost" id="btnVoiceCancel">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlgReplaceCat">
+      <form method="dialog" id="formReplaceCat" class="form dialog-form">
+        <h2>Удаление категории</h2>
+        <p id="replaceCatText"></p>
+        <input type="hidden" id="replaceCatId" />
+        <label>
+          Заменить на
+          <select id="replaceCatSelect" required></select>
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn danger">Удалить</button>
+          <button type="button" class="btn ghost" id="btnReplaceCancel">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
+    <?!= include('Client'); ?>
+  </body>
+</html>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Доходы–расходы</string>
+    <string name="settings">Настройки</string>
+    <string name="connection">Подключение</string>
+    <string name="categories">Категории</string>
+    <string name="dictate">Продиктовать</string>
+    <string name="stop_recording">Стоп</string>
+    <string name="send_text">Отправить</string>
+    <string name="recording">Запись… нажмите ещё раз — стоп</string>
+    <string name="note_hint">Заметка</string>
+    <string name="web_app_url">URL веб-приложения (.../exec)</string>
+    <string name="token">Токен Android</string>
+    <string name="save">Сохранить</string>
+    <string name="ping">Проверить связь</string>
+    <string name="preset_all">Всё</string>
+    <string name="preset_today">Сегодня</string>
+    <string name="preset_week">Неделя</string>
+    <string name="preset_month">Месяц</string>
+    <string name="preset_range">Период</string>
+    <string name="date_from">С</string>
+    <string name="date_to">По</string>
+    <string name="apply_range">Применить</string>
+    <string name="edit_tx">Запись</string>
+    <string name="confirm_tx">Подтверждение</string>
+    <string name="save_tx">Записать</string>
+    <string name="pick_category">Выберите категорию</string>
+    <string name="delete">Удалить</string>
+    <string name="cancel">Отмена</string>
+    <string name="type_income">Доход</string>
+    <string name="type_expense">Расход</string>
+    <string name="amount">Сумма</string>
+    <string name="category">Категория</string>
+    <string name="comment">Комментарий</string>
+    <string name="date">Дата (ГГГГ-ММ-ДД)</string>
+    <string name="add_category">Добавить</string>
+    <string name="rename">Переименовать</string>
+    <string name="empty_list">Нет записей за период</string>
+    <string name="empty_categories">Пока нет категорий</string>
+</resources>

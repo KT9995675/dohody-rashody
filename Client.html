@@ -1,0 +1,742 @@
+<script>
+  (function () {
+    var state = {
+      categories: [],
+      filter: { from: '', to: '' },
+      preset: 'all',
+      voiceDraft: null
+    };
+
+    var NEW_CAT_VALUE = '__new__';
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function run(fnName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function (resolve, reject) {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)[fnName].apply(null, args);
+      });
+    }
+
+    function formatMoney(n) {
+      return (
+        Number(n).toLocaleString('ru-RU', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2
+        }) + ' ₽'
+      );
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      return d.toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
+
+    function toDatetimeLocal(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      var pad = function (n) {
+        return ('0' + n).slice(-2);
+      };
+      return (
+        d.getFullYear() +
+        '-' +
+        pad(d.getMonth() + 1) +
+        '-' +
+        pad(d.getDate()) +
+        'T' +
+        pad(d.getHours()) +
+        ':' +
+        pad(d.getMinutes())
+      );
+    }
+
+    function ymd(d) {
+      var pad = function (n) {
+        return ('0' + n).slice(-2);
+      };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    function startOfWeek(d) {
+      var x = new Date(d);
+      var day = (x.getDay() + 6) % 7; // Mon=0
+      x.setDate(x.getDate() - day);
+      x.setHours(0, 0, 0, 0);
+      return x;
+    }
+
+    function fillCategorySelect(selectEl, selected, includeNew) {
+      selectEl.innerHTML = '';
+      state.categories.forEach(function (c) {
+        var opt = document.createElement('option');
+        opt.value = c.name;
+        opt.textContent = c.name;
+        if (selected && selected.toLowerCase() === c.name.toLowerCase()) {
+          opt.selected = true;
+        }
+        selectEl.appendChild(opt);
+      });
+      if (includeNew) {
+        var neu = document.createElement('option');
+        neu.value = NEW_CAT_VALUE;
+        neu.textContent = '— Новая категория —';
+        if (selected === NEW_CAT_VALUE) neu.selected = true;
+        selectEl.appendChild(neu);
+      }
+      if (!state.categories.length && includeNew) {
+        selectEl.value = NEW_CAT_VALUE;
+      }
+    }
+
+    function syncCategoryVisibility(typeSelectId, wrapId, newWrapId, selectId) {
+      var isExpense = $(typeSelectId).value === 'expense';
+      $(wrapId).classList.toggle('hidden', !isExpense);
+      if (!isExpense) {
+        $(newWrapId).classList.add('hidden');
+      } else {
+        $(newWrapId).classList.toggle('hidden', $(selectId).value !== NEW_CAT_VALUE);
+      }
+    }
+
+    function bindCategoryUi(typeId, selectId, newWrapId, wrapId) {
+      $(typeId).addEventListener('change', function () {
+        syncCategoryVisibility(typeId, wrapId, newWrapId, selectId);
+      });
+      $(selectId).addEventListener('change', function () {
+        $(newWrapId).classList.toggle('hidden', $(selectId).value !== NEW_CAT_VALUE);
+      });
+    }
+
+    function loadDashboard() {
+      return run('apiGetDashboard', state.filter).then(function (data) {
+        state.categories = data.categories || [];
+        renderBalance(data.balance);
+        renderPeriod(data);
+        renderTransactions(data.transactions || []);
+        renderCategories();
+        fillCategorySelect($('addCategory'), null, true);
+        syncCategoryVisibility('addType', 'addCategoryWrap', 'addNewCatWrap', 'addCategory');
+        if (data.timeZone) {
+          $('tzHint').textContent = 'Часовой пояс: ' + data.timeZone;
+        }
+      });
+    }
+
+    function renderBalance(balance) {
+      var el = $('balance');
+      el.textContent = formatMoney(balance);
+      el.classList.toggle('pos', balance >= 0);
+      el.classList.toggle('neg', balance < 0);
+    }
+
+    function renderPeriod(data) {
+      if (!state.filter.from && !state.filter.to) {
+        $('periodSum').textContent = '';
+        return;
+      }
+      $('periodSum').textContent =
+        'За период: +' +
+        formatMoney(data.periodIncome) +
+        ' / −' +
+        formatMoney(data.periodExpense);
+    }
+
+    function renderTransactions(list) {
+      var root = $('txList');
+      root.innerHTML = '';
+      if (!list.length) {
+        root.innerHTML = '<p class="muted">Записей нет</p>';
+        return;
+      }
+      list.forEach(function (t) {
+        var div = document.createElement('div');
+        div.className = 'item';
+        var title =
+          (t.type === 'income' ? 'Доход' : 'Расход') +
+          (t.category ? ' · ' + t.category : '');
+        div.innerHTML =
+          '<div><div>' +
+          escapeHtml(title) +
+          '</div><div class="meta">' +
+          escapeHtml(formatDate(t.date)) +
+          (t.comment ? ' · ' + escapeHtml(t.comment) : '') +
+          '</div></div>' +
+          '<div class="sum ' +
+          t.type +
+          '">' +
+          (t.type === 'income' ? '+' : '−') +
+          formatMoney(t.amount) +
+          '</div>' +
+          '<div class="item-actions">' +
+          '<button type="button" class="btn small" data-edit="' +
+          t.id +
+          '">Изменить</button>' +
+          '<button type="button" class="btn small" data-del="' +
+          t.id +
+          '">Удалить</button>' +
+          '</div>';
+        root.appendChild(div);
+      });
+    }
+
+    function renderCategories() {
+      var root = $('catList');
+      root.innerHTML = '';
+      if (!state.categories.length) {
+        root.innerHTML = '<p class="muted">Категорий пока нет</p>';
+        return;
+      }
+      state.categories.forEach(function (c) {
+        var div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML =
+          '<div><div>' +
+          escapeHtml(c.name) +
+          '</div></div>' +
+          '<div class="item-actions">' +
+          '<button type="button" class="btn small" data-cat-rename="' +
+          c.id +
+          '">Переименовать</button>' +
+          '<button type="button" class="btn small" data-cat-del="' +
+          c.id +
+          '">Удалить</button>' +
+          '</div>';
+        root.appendChild(div);
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function resolveCategory(selectId, newInputId) {
+      var v = $(selectId).value;
+      if (v === NEW_CAT_VALUE) {
+        var name = $(newInputId).value.trim();
+        if (!name) throw new Error('Укажите название новой категории');
+        return { category: name, confirmNewCategory: true };
+      }
+      return { category: v, confirmNewCategory: false };
+    }
+
+    function applyPreset(name) {
+      state.preset = name;
+      document.querySelectorAll('.chip').forEach(function (el) {
+        el.classList.toggle('active', el.getAttribute('data-preset') === name);
+      });
+      var today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (name === 'all') {
+        state.filter = { from: '', to: '' };
+        $('dateFrom').value = '';
+        $('dateTo').value = '';
+      } else if (name === 'today') {
+        state.filter = { from: ymd(today), to: ymd(today) };
+        $('dateFrom').value = state.filter.from;
+        $('dateTo').value = state.filter.to;
+      } else if (name === 'week') {
+        var from = startOfWeek(today);
+        state.filter = { from: ymd(from), to: ymd(today) };
+        $('dateFrom').value = state.filter.from;
+        $('dateTo').value = state.filter.to;
+      } else if (name === 'month') {
+        var mFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+        state.filter = { from: ymd(mFrom), to: ymd(today) };
+        $('dateFrom').value = state.filter.from;
+        $('dateTo').value = state.filter.to;
+      }
+      loadDashboard().catch(showError);
+    }
+
+    function showError(err) {
+      alert(err && err.message ? err.message : String(err));
+    }
+
+    // Tabs
+    document.querySelectorAll('.tab').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.tab').forEach(function (b) {
+          b.classList.remove('active');
+        });
+        document.querySelectorAll('.tab-panel').forEach(function (p) {
+          p.classList.remove('active');
+        });
+        btn.classList.add('active');
+        $('tab-' + btn.getAttribute('data-tab')).classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        applyPreset(chip.getAttribute('data-preset'));
+      });
+    });
+
+    $('btnApplyRange').addEventListener('click', function () {
+      state.preset = 'custom';
+      document.querySelectorAll('.chip').forEach(function (el) {
+        el.classList.remove('active');
+      });
+      state.filter = {
+        from: $('dateFrom').value || '',
+        to: $('dateTo').value || ''
+      };
+      loadDashboard().catch(showError);
+    });
+
+    bindCategoryUi('addType', 'addCategory', 'addNewCatWrap', 'addCategoryWrap');
+    bindCategoryUi('editType', 'editCategory', 'editNewCatWrap', 'editCategoryWrap');
+    bindCategoryUi('voiceType', 'voiceCategory', 'voiceNewCatWrap', 'voiceCategoryWrap');
+
+    $('formAdd').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      try {
+        var payload = {
+          type: $('addType').value,
+          amount: Number($('addAmount').value),
+          comment: $('addComment').value,
+          source: 'manual'
+        };
+        if (payload.type === 'expense') {
+          var cat = resolveCategory('addCategory', 'addNewCategory');
+          payload.category = cat.category;
+          payload.confirmNewCategory = cat.confirmNewCategory;
+        }
+        run('apiCreateTransaction', payload)
+          .then(function () {
+            $('formAdd').reset();
+            $('addType').value = 'expense';
+            return loadDashboard();
+          })
+          .catch(showError);
+      } catch (e) {
+        showError(e);
+      }
+    });
+
+    $('txList').addEventListener('click', function (ev) {
+      var editId = ev.target.getAttribute('data-edit');
+      var delId = ev.target.getAttribute('data-del');
+      if (editId) openEdit(editId);
+      if (delId) {
+        if (!confirm('Удалить запись?')) return;
+        run('apiDeleteTransaction', delId)
+          .then(loadDashboard)
+          .catch(showError);
+      }
+    });
+
+    function openEdit(id) {
+      Promise.all([run('apiGetTransaction', id), run('apiListCategories')])
+        .then(function (pair) {
+          var t = pair[0];
+          state.categories = pair[1];
+          $('editId').value = t.id;
+          $('editDate').value = toDatetimeLocal(t.date);
+          $('editType').value = t.type;
+          $('editAmount').value = t.amount;
+          $('editComment').value = t.comment || '';
+          fillCategorySelect($('editCategory'), t.category || null, true);
+          syncCategoryVisibility(
+            'editType',
+            'editCategoryWrap',
+            'editNewCatWrap',
+            'editCategory'
+          );
+          $('dlgEdit').showModal();
+        })
+        .catch(showError);
+    }
+
+    $('btnEditCancel').addEventListener('click', function () {
+      $('dlgEdit').close();
+    });
+
+    $('formEdit').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      try {
+        var id = $('editId').value;
+        var payload = {
+          type: $('editType').value,
+          amount: Number($('editAmount').value),
+          comment: $('editComment').value,
+          date: $('editDate').value
+        };
+        if (payload.type === 'expense') {
+          var cat = resolveCategory('editCategory', 'editNewCategory');
+          payload.category = cat.category;
+          payload.confirmNewCategory = cat.confirmNewCategory;
+        } else {
+          payload.category = '';
+        }
+        run('apiUpdateTransaction', id, payload)
+          .then(function () {
+            $('dlgEdit').close();
+            return loadDashboard();
+          })
+          .catch(showError);
+      } catch (e) {
+        showError(e);
+      }
+    });
+
+    $('formAddCat').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      run('apiAddCategory', $('newCatName').value)
+        .then(function () {
+          $('newCatName').value = '';
+          return loadDashboard();
+        })
+        .catch(showError);
+    });
+
+    $('catList').addEventListener('click', function (ev) {
+      var renameId = ev.target.getAttribute('data-cat-rename');
+      var delId = ev.target.getAttribute('data-cat-del');
+      if (renameId) {
+        var cat = state.categories.filter(function (c) {
+          return c.id === renameId;
+        })[0];
+        var name = prompt('Новое название', cat ? cat.name : '');
+        if (!name) return;
+        run('apiRenameCategory', renameId, name)
+          .then(loadDashboard)
+          .catch(showError);
+      }
+      if (delId) {
+        run('apiGetCategoryUsage', delId)
+          .then(function (usage) {
+            if (usage.count === 0) {
+              if (!confirm('Удалить категорию «' + usage.name + '»?')) return;
+              return run('apiDeleteCategory', delId, '').then(loadDashboard);
+            }
+            $('replaceCatId').value = delId;
+            $('replaceCatText').textContent =
+              'Категория «' +
+              usage.name +
+              '» используется в ' +
+              usage.count +
+              ' записях. Выберите замену:';
+            var sel = $('replaceCatSelect');
+            sel.innerHTML = '';
+            state.categories.forEach(function (c) {
+              if (c.id === delId) return;
+              var opt = document.createElement('option');
+              opt.value = c.name;
+              opt.textContent = c.name;
+              sel.appendChild(opt);
+            });
+            if (!sel.options.length) {
+              alert('Сначала добавьте другую категорию для замены.');
+              return;
+            }
+            $('dlgReplaceCat').showModal();
+          })
+          .catch(showError);
+      }
+    });
+
+    $('btnReplaceCancel').addEventListener('click', function () {
+      $('dlgReplaceCat').close();
+    });
+
+    $('formReplaceCat').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      run('apiDeleteCategory', $('replaceCatId').value, $('replaceCatSelect').value)
+        .then(function () {
+          $('dlgReplaceCat').close();
+          return loadDashboard();
+        })
+        .catch(showError);
+    });
+
+    // Voice: MediaRecorder → Gemini (not Web Speech API)
+    var voiceState = {
+      recorder: null,
+      chunks: [],
+      stream: null,
+      timer: null,
+      mimeType: ''
+    };
+
+    function parseAndOpen(text) {
+      text = String(text || '').trim();
+      if (!text) {
+        $('voiceStatus').textContent = 'Введите или скажите фразу.';
+        return;
+      }
+      $('voiceStatus').textContent = 'Разбираю…';
+      run('apiParseNote', text)
+        .then(function (parsed) {
+          openVoiceDialog(parsed, text);
+          $('voiceStatus').textContent = 'Проверьте и подтвердите.';
+        })
+        .catch(showError);
+    }
+
+    function blobToBase64(blob) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onloadend = function () {
+          var dataUrl = String(reader.result || '');
+          var comma = dataUrl.indexOf(',');
+          resolve(comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function pickRecorderMime() {
+      var candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus'
+      ];
+      if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) {
+        return '';
+      }
+      for (var i = 0; i < candidates.length; i++) {
+        if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+      }
+      return '';
+    }
+
+    function stopVoiceTracks() {
+      if (voiceState.timer) {
+        clearTimeout(voiceState.timer);
+        voiceState.timer = null;
+      }
+      if (voiceState.stream) {
+        voiceState.stream.getTracks().forEach(function (t) {
+          t.stop();
+        });
+        voiceState.stream = null;
+      }
+      $('btnVoice').classList.remove('hidden');
+      $('btnVoiceStop').classList.add('hidden');
+    }
+
+    function sendAudioBlob(blob, mimeType) {
+      if (!blob || !blob.size) {
+        $('voiceStatus').textContent = 'Пустая запись. Попробуйте ещё раз.';
+        return;
+      }
+      if (blob.size > 3 * 1024 * 1024) {
+        $('voiceStatus').textContent = 'Файл слишком большой. Запишите короче (до 15 сек).';
+        return;
+      }
+      $('voiceStatus').textContent = 'Отправляю в Gemini…';
+      blobToBase64(blob)
+        .then(function (b64) {
+          return run('apiParseAudioNote', b64, mimeType || blob.type || 'audio/webm');
+        })
+        .then(function (parsed) {
+          var raw =
+            (parsed.draft && parsed.draft.rawText) ||
+            (parsed.draft && parsed.draft.comment) ||
+            '[голос]';
+          if (parsed.draft && parsed.draft.rawText) {
+            $('noteText').value = parsed.draft.rawText;
+          }
+          openVoiceDialog(parsed, raw);
+          $('voiceStatus').textContent = 'Проверьте и подтвердите.';
+        })
+        .catch(function (err) {
+          $('voiceStatus').textContent =
+            'Не удалось разобрать голос. ' + (err && err.message ? err.message : String(err));
+        });
+    }
+
+    function startVoiceRecording() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        $('voiceStatus').textContent =
+          'Микрофон недоступен. На телефоне выберите файл через «аудиофайл» или введите текст.';
+        return;
+      }
+      if (!window.MediaRecorder) {
+        $('voiceStatus').textContent =
+          'Запись не поддерживается. Используйте аудиофайл или текст.';
+        return;
+      }
+
+      var mime = pickRecorderMime();
+      $('voiceStatus').textContent = 'Запрос микрофона…';
+
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then(function (stream) {
+          voiceState.stream = stream;
+          voiceState.chunks = [];
+          voiceState.mimeType = mime;
+          var options = mime ? { mimeType: mime } : undefined;
+          var recorder;
+          try {
+            recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+          } catch (e) {
+            recorder = new MediaRecorder(stream);
+          }
+          voiceState.recorder = recorder;
+          voiceState.mimeType = recorder.mimeType || mime || 'audio/webm';
+
+          recorder.ondataavailable = function (ev) {
+            if (ev.data && ev.data.size) voiceState.chunks.push(ev.data);
+          };
+          recorder.onerror = function () {
+            $('voiceStatus').textContent = 'Ошибка записи. Попробуйте аудиофайл или текст.';
+            stopVoiceTracks();
+          };
+          recorder.onstop = function () {
+            var blob = new Blob(voiceState.chunks, { type: voiceState.mimeType });
+            stopVoiceTracks();
+            sendAudioBlob(blob, voiceState.mimeType);
+          };
+
+          recorder.start(250);
+          $('btnVoice').classList.add('hidden');
+          $('btnVoiceStop').classList.remove('hidden');
+          $('voiceStatus').textContent = 'Идёт запись… нажмите «Стоп» (макс. 15 сек).';
+          voiceState.timer = setTimeout(function () {
+            if (voiceState.recorder && voiceState.recorder.state === 'recording') {
+              voiceState.recorder.stop();
+            }
+          }, 15000);
+        })
+        .catch(function (err) {
+          var name = (err && err.name) || '';
+          if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+            $('voiceStatus').textContent =
+              'Микрофон в оболочке Google недоступен. Используйте «Голос (файл)» или диктовку в поле фразы.';
+            $('audioFile').click();
+          } else if (name === 'NotFoundError') {
+            $('voiceStatus').textContent = 'Микрофон не найден.';
+          } else {
+            $('voiceStatus').textContent =
+              'Не удалось открыть микрофон (' +
+              name +
+              '). Используйте аудиофайл или текст.';
+          }
+        });
+    }
+
+    function stopVoiceRecording() {
+      if (voiceState.recorder && voiceState.recorder.state === 'recording') {
+        $('voiceStatus').textContent = 'Обрабатываю запись…';
+        voiceState.recorder.stop();
+      } else {
+        stopVoiceTracks();
+      }
+    }
+
+    $('btnVoice').addEventListener('click', function () {
+      // Primary path in GAS iframe: system recorder / file picker
+      $('audioFile').click();
+    });
+
+    $('btnVoiceMic').addEventListener('click', startVoiceRecording);
+    $('btnVoiceStop').addEventListener('click', stopVoiceRecording);
+
+    $('audioFile').addEventListener('change', function (ev) {
+      var file = ev.target.files && ev.target.files[0];
+      ev.target.value = '';
+      if (!file) return;
+      sendAudioBlob(file, file.type || 'audio/mp4');
+    });
+
+    $('btnParseNote').addEventListener('click', function () {
+      parseAndOpen($('noteText').value);
+    });
+
+    $('noteText').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        parseAndOpen($('noteText').value);
+      }
+    });
+
+    function openVoiceDialog(parsed, rawText) {
+      var draft = (parsed && parsed.draft) || { rawText: rawText };
+      state.voiceDraft = draft;
+
+      $('voiceRaw').textContent = '«' + rawText + '»';
+      var hint = $('voiceParseHint');
+      if (parsed && !parsed.ok && parsed.error) {
+        hint.textContent = parsed.error;
+        hint.classList.remove('hidden');
+      } else {
+        hint.textContent = '';
+        hint.classList.add('hidden');
+      }
+
+      $('voiceType').value = draft.type || 'expense';
+      $('voiceAmount').value = draft.amount != null ? draft.amount : '';
+      $('voiceComment').value = draft.comment || '';
+      fillCategorySelect($('voiceCategory'), draft.category || null, true);
+      if (draft.categoryIsNew && draft.category) {
+        $('voiceCategory').value = NEW_CAT_VALUE;
+        $('voiceNewCategory').value = draft.category;
+        $('voiceNewHint').classList.remove('hidden');
+      } else {
+        $('voiceNewCategory').value = '';
+        $('voiceNewHint').classList.add('hidden');
+      }
+      syncCategoryVisibility(
+        'voiceType',
+        'voiceCategoryWrap',
+        'voiceNewCatWrap',
+        'voiceCategory'
+      );
+      $('dlgVoice').showModal();
+    }
+
+    $('btnVoiceCancel').addEventListener('click', function () {
+      $('dlgVoice').close();
+    });
+
+    $('formVoice').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      try {
+        var payload = {
+          type: $('voiceType').value,
+          amount: Number($('voiceAmount').value),
+          comment: $('voiceComment').value,
+          source: 'web_voice',
+          rawText: (state.voiceDraft && state.voiceDraft.rawText) || ''
+        };
+        if (payload.type === 'expense') {
+          var cat = resolveCategory('voiceCategory', 'voiceNewCategory');
+          payload.category = cat.category;
+          payload.confirmNewCategory = cat.confirmNewCategory;
+        }
+        run('apiCreateTransaction', payload)
+          .then(function () {
+            $('dlgVoice').close();
+            $('voiceStatus').textContent = 'Сохранено.';
+            return loadDashboard();
+          })
+          .catch(showError);
+      } catch (e) {
+        showError(e);
+      }
+    });
+
+    loadDashboard().catch(showError);
+  })();
+</script>
