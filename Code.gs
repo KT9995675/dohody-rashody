@@ -7,11 +7,8 @@
 /**
  * Browser-tab favicon for GAS Web App (outer shell). Must be a public https URL —
  * data-URI &lt;link&gt; inside the iframe does not change the tab icon.
- * Bump ?v= when replacing the file so browsers refetch.
+ * Prefer Drive URL from getFaviconUrl_(); bump ?v= on GitHub fallback when replacing.
  */
-var FAVICON_URL_ =
-  'https://raw.githubusercontent.com/KT9995675/dohody-rashody/main/assets/favicon-32.png?v=2';
-
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Доходы–расходы')
@@ -19,6 +16,7 @@ function onOpen() {
     .addItem('Настроить Gemini…', 'setupGemini')
     .addItem('Проверить Gemini', 'testGemini')
     .addItem('Токен для Android…', 'showMobileToken')
+    .addItem('Опубликовать фавикон…', 'publishFavicon')
     .addItem('Открыть веб-приложение…', 'showWebAppHint')
     .addToUi();
 }
@@ -105,13 +103,13 @@ function doGet(e) {
         '</body></html>'
     )
       .setTitle('Доходы–расходы')
-      .setFaviconUrl(FAVICON_URL_);
+      .setFaviconUrl(getFaviconUrl_());
   }
 
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
     .setTitle('Доходы–расходы')
-    .setFaviconUrl(FAVICON_URL_)
+    .setFaviconUrl(getFaviconUrl_())
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
