@@ -7,7 +7,7 @@
 /**
  * Browser-tab favicon for GAS Web App (outer shell). Must be a public https URL —
  * data-URI &lt;link&gt; inside the iframe does not change the tab icon.
- * Prefer Drive URL from getFaviconUrl_(); bump ?v= on GitHub fallback when replacing.
+ * URL: public GitHub gist (no Drive). See FaviconPublish.gs.
  */
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -16,7 +16,6 @@ function onOpen() {
     .addItem('Настроить Gemini…', 'setupGemini')
     .addItem('Проверить Gemini', 'testGemini')
     .addItem('Токен для Android…', 'showMobileToken')
-    .addItem('Опубликовать фавикон…', 'publishFavicon')
     .addItem('Открыть веб-приложение…', 'showWebAppHint')
     .addToUi();
 }
